@@ -99,10 +99,13 @@ inline bool uiConfigureSession(int levelId) {
         }
         // ...and, as the menu's third choice, the wave's behaviour on top (Config::wavePulse / waveCentre).
         if (g_uiGlitchMode >= UI_GLITCH_WAVE) {
-            g_cfg.wavePulse = kWavePulseDefault;
+            // Path Solver: the hold length and the two preferences come from the settings page
+            // (defaults are upstream's 12 / 8 / 4), so a wave that still zigzags more than a
+            // corridor needs can be asked for longer holds and fewer changes.
+            g_cfg.wavePulse = (int)Mod::get()->getSettingValue<int64_t>("wave-min-hold");
             g_cfg.waveCentre = kWaveCentreDefault;
-            g_cfg.waveTidy = kWaveTidyDefault;
-            g_cfg.waveToggle = kWaveToggleDefault;
+            g_cfg.waveTidy = (double)Mod::get()->getSettingValue<int64_t>("wave-centre-pull");
+            g_cfg.waveToggle = (int)Mod::get()->getSettingValue<int64_t>("wave-click-cost");
         }
         // Section search: on unless Options turned it off (cfg dpsecauto=0, the same switch).
         if (!g_uiSecSolve) g_cfg.dpSecAuto = false;

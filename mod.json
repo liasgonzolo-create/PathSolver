@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.2",
+	"version": "v2.1.0-alpha.3",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -130,6 +130,30 @@
 			"default": 15,
 			"min": 1,
 			"max": 600
+		},
+		"wave-min-hold": {
+			"type": "int",
+			"name": "Wave: minimum hold (ticks)",
+			"description": "With Avoid glitches on its wave choice: the wave keeps each press or release at least this long (240 ticks = 1 second). 12 is standard. Raise it (18-24) for bigger, slower zigzags; where a corridor is too tight for that the solver eases it for that stretch and says so. Needs a new solve.",
+			"default": 12,
+			"min": 2,
+			"max": 60
+		},
+		"wave-click-cost": {
+			"type": "int",
+			"name": "Wave: prefer fewer clicks (strength)",
+			"description": "How strongly the solver prefers a wave route with fewer button changes. 4 is standard; 12-20 makes it take the longest diagonals a corridor allows. It only ranks routes, it never blocks one.",
+			"default": 4,
+			"min": 0,
+			"max": 60
+		},
+		"wave-centre-pull": {
+			"type": "int",
+			"name": "Wave: stay near the middle (strength)",
+			"description": "How strongly the wave is pulled to the middle of its corridor. 8 is standard. Lower it (2-4) if the wave makes many small zigzags around the middle instead of a few big ones. It only ranks routes.",
+			"default": 8,
+			"min": 0,
+			"max": 40
 		}
 	}
 }
