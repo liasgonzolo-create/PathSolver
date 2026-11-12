@@ -11,6 +11,8 @@ using namespace geode::prelude;
 namespace ps {
 
 static const int MAX_TICKS = 240 * 60 * 20; // 20 minutes of level
+static const int LONG = -1;               // edit length: until a bit past the death
+static const int GAIN = 8;                // ticks further a try must get to count as progress
 
 Solver& Solver::get() {
     static Solver s;
@@ -66,7 +68,8 @@ void Solver::onQuit(PlayLayer* pl) {
     m_level = nullptr;
 }
 
-void Solver::startSolve() {
+void Solver::startSolve(Mode m) {
+    mode = m;
     phase = Phase::Verify; // replaying whatever plan exists is always step one
     m_needInit = true;
     status = "starting";
@@ -142,6 +145,13 @@ void Solver::init(PlayLayer* pl) {
     if (!m_budgetTouched) budgetMs = settingInt("sim-budget-ms");
     m_prune = Mod::get()->getSettingValue<bool>("prune-clicks");
     m_rng.seed(static_cast<unsigned>(settingInt("seed")));
+    if (mode == Mode::Absolute) { // frame-precise: any 1-tick input is allowed, no click clean-up
+        m_minPress = m_minGap = 1;
+        m_prune = false;
+    }
+    if (!m_budgetTouched) budgetMs = std::max(budgetMs, 30);
+    buildTable();
+    m_stack.clear();
 
     m_savedAttempts = compat::getAttempts(pl->m_level);
     if (!compat::isPractice(pl)) pl->togglePracticeMode(true);
@@ -316,12 +326,12 @@ void Solver::endAttempt(PlayLayer* pl, End e, int D) {
         } else {
             registerDeath(pl, D);
             if (m_everCompleted) ++stats.fixups;
-            bestD = m_recordD = D;
-            stuck = 0;
-            m_slack = 0;
+            bestD = D;
             phase = Phase::Search;
             status = "searching";
-            makeMutation();
+            m_stack.clear();
+            m_stack.push_back(Node{D, 0, 0, {}});
+            nextCandidate(pl);
         }
         break;
 
@@ -338,21 +348,25 @@ void Solver::endAttempt(PlayLayer* pl, End e, int D) {
             startVerify();
         } else {
             registerDeath(pl, D);
-            if (D >= bestD + 2 - m_slack) {
+            // Samples on the part of the run shared with the accepted plan are
+            // valid for it too; keep them so respawn checks stay exact.
+            {
+                int hi = std::min<int>(std::min(from, D), static_cast<int>(std::min(path.size(), candPath.size())) - 1);
+                for (int i = std::max(0, anchorTick); i <= hi; ++i) path[i] = candPath[i];
+            }
+            if (!m_stack.empty() && D >= m_stack.back().D + GAIN) {
+                // Progress: this edit becomes a new node of the search tree.
+                Node n{D, 0, from, {}};
+                if (from < static_cast<int>(plan.size())) n.undo.assign(plan.begin() + from, plan.end());
                 plan = cand;
                 path = candPath;
                 bestD = D;
                 m_cpValidLimit = INT_MAX;
-                if (D > m_recordD) { m_recordD = D; stuck = 0; m_slack = 0; }
-                else ++stuck;
+                m_stack.push_back(std::move(n));
             } else {
-                ++stuck;
                 m_cpValidLimit = from; // later checkpoints belong to the rejected try
             }
-            // Stuck for a long time: allow plans that die a bit earlier, to
-            // get out of dead-end routes.
-            if (stuck > 0 && stuck % 150 == 0) m_slack = std::min(m_slack + 48, 1440);
-            makeMutation();
+            nextCandidate(pl);
         }
         break;
 
@@ -384,16 +398,6 @@ void Solver::endAttempt(PlayLayer* pl, End e, int D) {
     }
 }
 
-// Lengths a person would actually press for: mostly taps, some short holds,
-// a few long ones.
-int Solver::sampleHold() {
-    std::uniform_real_distribution<double> uni(0.0, 1.0);
-    double r = uni(m_rng);
-    if (r < 0.40) return m_minPress + static_cast<int>(uni(m_rng) * 4);
-    if (r < 0.75) return m_minPress + static_cast<int>(uni(m_rng) * 26);
-    return 20 + static_cast<int>(uni(m_rng) * 90);
-}
-
 // From `fromTick` onward: no hold shorter than min-press, no gap between two
 // holds shorter than min-gap. Never changes anything before `fromTick`.
 void Solver::humanize(std::vector<uint8_t>& p, int fromTick) {
@@ -419,49 +423,64 @@ void Solver::humanize(std::vector<uint8_t>& p, int fromTick) {
     }
 }
 
-void Solver::makeMutation() {
-    std::uniform_real_distribution<double> uni(0.0, 1.0);
-    int D = std::max(bestD, 1);
-    // Look-back window: usually tiny, periodically larger, and larger still
-    // the longer we are stuck (20 ticks up to ~10 s).
-    int lvl = std::min<int>(std::countr_zero(static_cast<unsigned>(stuck + 1)) + stuck / 96, 7);
-    int W = 20 << lvl;
-    stats.window = W;
+// Every edit the search may try at one death, most likely first.
+// An edit is (d, L): d ticks before the death, flip the input for L ticks
+// (L == LONG means "until a bit past the death").
+void Solver::buildTable() {
+    m_table.clear();
+    std::vector<int> nearD, farD;
+    for (int d = 1; d <= 24; ++d) nearD.push_back(d);
+    for (int d = 26; d <= 48; d += 2) nearD.push_back(d);
+    for (int d = 52; d <= 96; d += 4) nearD.push_back(d);
+    for (int d = 104; d <= 480; d += 8) farD.push_back(d);
+    for (int d : nearD) for (int L : {LONG, 1, 8, 24}) m_table.emplace_back(d, L);
+    for (int d : nearD) for (int L : {2, 3, 4, 6, 12, 16, 35, 50, 80}) m_table.emplace_back(d, L);
+    for (int d : farD) for (int L : {LONG, 1, 8, 24, 50}) m_table.emplace_back(d, L);
+}
 
-    int M = 0;
-    for (int tries = 0; tries < 12; ++tries) {
-        cand = plan;
-        size_t need = static_cast<size_t>(D) + 400;
-        if (cand.size() < need) cand.resize(need, 0);
-        int n = static_cast<int>(cand.size());
-
-        M = std::clamp(D - 1 - static_cast<int>(W * std::pow(uni(m_rng), 1.6)), 0, n - 1);
-        bool holdAfter = std::find(cand.begin() + M, cand.end(), 1) != cand.end();
-        double r = uni(m_rng);
-        int type = (!holdAfter || r < 0.55) ? 0 : (r < 0.85 ? 1 : 2);
-        int h = sampleHold();
-
-        if (type == 0) { // press at M for h ticks
-            if (M > 0 && !cand[M - 1]) {
-                int e = M;
-                while (e > 0 && !cand[e - 1]) --e;
-                if (e > 0 && M - e < m_minGap) M = e; // too close to the last click: extend it
+// Picks the next untried edit for the newest node. When a node has nothing
+// left, undo its edit and carry on with its parent (backtracking).
+void Solver::nextCandidate(PlayLayer* pl) {
+    for (;;) {
+        if (m_stack.empty()) return;
+        Node& n = m_stack.back();
+        if (n.cursor >= static_cast<int>(m_table.size())) {
+            if (m_stack.size() == 1) {
+                status = "no path found from here";
+                Notification::create("Path Solver: ran out of options. Try Absolute mode.", NotificationIcon::Error)->show();
+                stop(pl);
+                return;
             }
-            if (M + h + 64 > n) { cand.resize(M + h + 64, 0); n = static_cast<int>(cand.size()); }
-            std::fill(cand.begin() + M, cand.begin() + M + h, 1);
-        } else {
-            if (cand[M]) {
-                int s = M;
-                while (s > 0 && cand[s - 1]) --s;
-                if (M - s < m_minPress) M = s; // would leave a too-short click: drop it whole
-            }
-            int end = type == 1 ? std::min(n, M + std::max(h, m_minGap)) : n;
-            std::fill(cand.begin() + M, cand.begin() + end, 0);
+            plan.resize(std::min<size_t>(plan.size(), n.editM));
+            plan.resize(n.editM, 0);
+            plan.insert(plan.end(), n.undo.begin(), n.undo.end());
+            m_cpValidLimit = std::min(m_cpValidLimit, n.editM);
+            m_stack.pop_back();
+            bestD = m_stack.back().D;
+            ++stats.backtracks;
+            continue;
         }
-        humanize(cand, M);
-        if (!samePlan(cand, plan)) break;
+        auto [d, L] = m_table[n.cursor++];
+        int M = n.D - d;
+        if (M < 0) continue;
+
+        cand = plan;
+        size_t need = static_cast<size_t>(n.D) + 400;
+        if (cand.size() < need) cand.resize(need, 0);
+        int size = static_cast<int>(cand.size());
+        uint8_t v = cand[M] ? 0 : 1;
+        if (L != LONG) L = std::max(L, v ? m_minPress : m_minGap);
+        int end = L == LONG ? std::min(size, n.D + 120) : std::min(size, M + L);
+        if (end <= M) continue;
+        std::fill(cand.begin() + M, cand.begin() + end, v);
+        if (m_minPress > 1 || m_minGap > 1) humanize(cand, M);
+        if (samePlan(cand, plan)) continue;
+
+        from = M;
+        stuck = n.cursor;
+        stats.window = d;
+        break;
     }
-    from = M;
     candPath = path;
     m_needRewind = true;
 }

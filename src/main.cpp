@@ -154,14 +154,25 @@ class $modify(PSPauseLayer, PauseLayer) {
 
     void onSolve(CCObject*) {
         auto& s = Solver::get();
-        if (s.solving()) s.stop(PlayLayer::get());
-        else {
+        if (s.solving()) {
             s.stop(PlayLayer::get());
-            s.plan.clear();
-            s.path.clear();
-            s.startSolve();
+            this->onResume(nullptr);
+            return;
         }
-        this->onResume(nullptr);
+        geode::createQuickPopup(
+            "Path Solver",
+            "<cg>Absolute</c>: frame-precise inputs, fastest search, best for very hard levels.\n"
+            "<cy>Accurate</c>: human-length clicks, then removes extra clicks. Slower.",
+            "Accurate", "Absolute",
+            [this](FLAlertLayer*, bool absolute) {
+                auto& s = Solver::get();
+                s.stop(PlayLayer::get());
+                s.plan.clear();
+                s.path.clear();
+                s.startSolve(absolute ? ps::Mode::Absolute : ps::Mode::Accurate);
+                this->onResume(nullptr);
+            }
+        );
     }
 
     void onPlay(CCObject*) {

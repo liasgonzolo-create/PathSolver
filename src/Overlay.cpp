@@ -172,7 +172,7 @@ void Overlay::redraw(PlayLayer* pl) {
         s.phase == Phase::Search ? "SOLVING" :
         s.phase == Phase::Verify ? "VERIFYING" :
         s.phase == Phase::Prune ? "REMOVING CLICKS" : "PLAYING MACRO";
-    place(m_title, fmt::format("PATH SOLVER V1.1 - {}", phase), 3.f);
+    place(m_title, fmt::format("PATH SOLVER V1.2 {} - {}", s.mode == Mode::Absolute ? "ABSOLUTE" : "ACCURATE", phase), 3.f);
 
     if (playback) {
         place(m_head, fmt::format("t={} / {}   {:.2f}s of {:.2f}s   clicks {}",
@@ -183,7 +183,7 @@ void Overlay::redraw(PlayLayer* pl) {
     } else {
         int secs = static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - s.startTime).count());
         const char* what =
-            s.phase == Phase::Search ? "finding a path: each death teaches the plan" :
+            s.phase == Phase::Search ? "finding a path: trying edits just before each death" :
             s.phase == Phase::Verify ? "replaying the whole plan from the start" :
             "testing the level without each click";
         place(m_head, fmt::format(
@@ -201,7 +201,8 @@ void Overlay::redraw(PlayLayer* pl) {
         else {
             int span = std::max(1, s.bestD - s.anchorTick);
             stage = static_cast<float>(s.curTick - s.anchorTick) / span;
-            cap = fmt::format("current try   look-back {:.2f}s   stuck {}", s.stats.window / 240.f, s.stuck);
+            cap = fmt::format("option {}/{} at this death   {} ticks back   depth {}   backtracks {}",
+                s.stuck, s.optionCount(), s.stats.window, s.depth(), s.stats.backtracks);
         }
         place(m_cap2, cap, 1.f);
         y = drawBar(x, y, colW, stage, ccc4f(0.35f, 0.65f, 1.f, 1.f)) - 5.f;

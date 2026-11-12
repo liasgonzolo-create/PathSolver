@@ -13,6 +13,7 @@ constexpr float TICKF = 1.f / 240.f;
 
 enum class Phase { Idle, Search, Verify, Prune, Playback };
 enum class End { Died, Completed, Converged };
+enum class Mode { Accurate, Absolute };
 
 struct Sample { float x = 0, y = 0; };
 
@@ -24,6 +25,7 @@ struct Stats {
     int pruned = 0;     // clicks removed or merged
     int clicksBefore = 0;
     int window = 0;     // current look-back window in ticks
+    int backtracks = 0; // search-tree nodes abandoned
     int cpFaults = 0;   // respawns that landed off the plan and forced a full replay
 };
 
@@ -36,12 +38,14 @@ struct Perf {
 
 // How it works
 //  The game itself is the simulator. The solver keeps one plan (hold / release
-//  for every tick). It replays the plan, and when the player dies it edits the
-//  plan a little way before the death (add a press, cut a press short, or
-//  clear what follows), rewinds to a practice checkpoint and tries again. An
-//  edit is kept only if the player gets further. When the end is reached the
-//  plan is replayed from tick 0 with no rewinds (Verify), then every click is
-//  test-deleted and test-merged (Prune), then verified once more.
+//  for every tick). It replays the plan; at each death it walks a fixed list
+//  of edits just before the death (flip the input d ticks earlier for L
+//  ticks), nearest first, rewinding to a practice checkpoint for each. The
+//  first edit that gets further is kept and the search moves on to the next
+//  death; if a death has no edit that helps, the previous edit is undone and
+//  its remaining options are tried (depth-first search). When the end is
+//  reached the plan is replayed from tick 0 (Verify); in Accurate mode every
+//  click is then test-deleted and test-merged (Prune) and verified again.
 class Solver {
 public:
     static Solver& get();
@@ -80,7 +84,10 @@ public:
     // ---- control ----
     void onLevelEnter(GJGameLevel* level);
     void onQuit(PlayLayer* pl);
-    void startSolve();
+    void startSolve(Mode m);
+    Mode mode = Mode::Accurate;
+    int depth() const { return static_cast<int>(m_stack.size()); }
+    int optionCount() const { return static_cast<int>(m_table.size()); }
     void startPlayback();
     void stop(PlayLayer* pl);
 
@@ -103,9 +110,9 @@ private:
     void startVerify();
     void startPrune();
     void nextPruneTest();
-    void makeMutation();
+    void buildTable();
+    void nextCandidate(PlayLayer* pl);
     void humanize(std::vector<uint8_t>& p, int fromTick);
-    int sampleHold();
     void registerDeath(PlayLayer* pl, int D);
     void finish(PlayLayer* pl);
     void setHeld(PlayLayer* pl, bool want);
@@ -123,7 +130,12 @@ public:
 private:
     std::vector<int> m_cpTicks;      // tick of every checkpoint we own, oldest first
     int m_cpValidLimit = INT_MAX;    // checkpoints after this tick are off the accepted path
-    int m_recordD = -1000, m_slack = 0, m_tickOffset = 0, m_lastCpTick = 0;
+    int m_tickOffset = 0, m_lastCpTick = 0;
+    // One node per accepted edit: how far it got, which option is next, and
+    // what the plan looked like before it (to undo it when backtracking).
+    struct Node { int D; int cursor; int editM; std::vector<uint8_t> undo; };
+    std::vector<Node> m_stack;
+    std::vector<std::pair<int, int>> m_table;
     int m_convergeFrom = 0, m_streak = 0;
     int m_pruneCursor = 0, m_pruneOp = 0, m_pruneRunStart = 0;
     int m_cpInterval = 24, m_minPress = 6, m_minGap = 6;
