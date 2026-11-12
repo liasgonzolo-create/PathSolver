@@ -90,7 +90,7 @@ class $modify(PSPlayLayer, PlayLayer) {
     void levelComplete() {
         auto& s = Solver::get();
         if (s.solving()) {
-            s.onComplete();
+            s.onComplete(this);
             return;
         }
         // Safe mode: a run the macro played is never saved as a real completion.

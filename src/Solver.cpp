@@ -216,12 +216,16 @@ void Solver::beginAttempt(PlayLayer* pl) {
     m_lastCpTick = expect;
     m_streak = 0;
     m_died = m_completed = false;
+    if (compat::levelEnded(pl)) m_endFlagUsable = false; // still set right after a reset: can't trust it
     ++stats.attempts;
 }
 
 bool Solver::preStep(PlayLayer* pl) {
     if (m_needInit) { init(pl); return false; }
     if (m_needRewind) { beginAttempt(pl); return false; }
+    // The game may report the finish late (after its end animation), outside
+    // of a tick we ran, so the flag is checked here as well.
+    if (m_completed) { endAttempt(pl, End::Completed, curTick + 1); return false; }
     syncCheckpoints(pl);
 
     int t = std::max(0, compat::rawTick(pl) + m_tickOffset);
@@ -268,13 +272,22 @@ bool Solver::preStep(PlayLayer* pl) {
     }
 
     setHeld(pl, t < static_cast<int>(cand.size()) && cand[t]);
-    m_died = m_completed = false;
+    m_died = false;
     return true;
 }
 
 void Solver::postStep(PlayLayer* pl) {
-    if (m_completed) endAttempt(pl, End::Completed, curTick + 1);
+    if (m_completed || (m_endFlagUsable && compat::levelEnded(pl))) endAttempt(pl, End::Completed, curTick + 1);
     else if (m_died) endAttempt(pl, End::Died, curTick);
+}
+
+// Called when the game says the level is complete. A leftover end animation
+// from an earlier try could fire this late, so it only counts if the player
+// really is at the end.
+void Solver::onComplete(PlayLayer* pl) {
+    float len = compat::levelLength(pl);
+    bool nearEnd = len <= 0.f || pl->m_player1->getPositionX() >= len - 600.f;
+    if (nearEnd || (m_endFlagUsable && compat::levelEnded(pl))) m_completed = true;
 }
 
 void Solver::registerDeath(PlayLayer* pl, int D) {
@@ -288,6 +301,7 @@ void Solver::registerDeath(PlayLayer* pl, int D) {
 }
 
 void Solver::endAttempt(PlayLayer* pl, End e, int D) {
+    m_completed = false;
     switch (phase) {
     case Phase::Verify:
         plan = cand;
@@ -521,7 +535,8 @@ void Solver::finish(PlayLayer* pl) {
         fmt::format("Solved with {} clicks{}", clickCount(plan), saved ? " (macro saved)" : ""),
         NotificationIcon::Success
     )->show();
-    startPlayback(); // show the result straight away
+    if (compat::isPractice(pl)) pl->togglePracticeMode(false);
+    startPlayback(); // show the result straight away, as a normal-mode run
 }
 
 // ------------------------------------------------------------------ playback

@@ -90,7 +90,7 @@ public:
     int playbackSteps(PlayLayer* pl, float dt);
     void playbackPre(PlayLayer* pl);
     void onDeath() { m_died = true; }
-    void onComplete() { m_completed = true; }
+    void onComplete(PlayLayer* pl);
     void onReset(PlayLayer* pl);
 
     bool saveMacro();
@@ -117,6 +117,7 @@ private:
     bool m_held = false, m_injecting = false, m_died = false, m_completed = false;
     bool m_pruneDone = false, m_everCompleted = false, m_usedMacro = false;
     bool m_inReset = false, m_prune = true;
+    bool m_endFlagUsable = true;  // false if the game's end flag survives a reset
 public:
     bool m_budgetTouched = false; // Up/Down was used; keep that speed
 private:

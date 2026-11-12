@@ -22,6 +22,9 @@ inline bool isPlatformer(PlayLayer* pl) { return pl->m_isPlatformer; }
 inline float levelLength(PlayLayer* pl) { return pl->m_levelLength; }
 inline bool& testMode(PlayLayer* pl) { return pl->m_isTestMode; }
 
+// True once the player has reached the end of the level.
+inline bool levelEnded(PlayLayer* pl) { return pl->m_levelEndAnimationStarted || pl->m_hasCompletedLevel; }
+
 // Show / hide everything the level draws (objects, players, effects).
 inline void setWorldVisible(PlayLayer* pl, bool visible) {
     if (pl->m_objectLayer) pl->m_objectLayer->setVisible(visible);
