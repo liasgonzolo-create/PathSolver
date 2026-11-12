@@ -1459,6 +1459,34 @@ class $modify(PlayLayer) {
                     writeSolvedWith(name, Mod::get()->getVersion().toVString());
                     writeResult(std::string("dpsolve: solution saved -> ") + name);
                     notify::show("gdsolver: solution saved", NotificationIcon::Success, 3.f);
+                    // Path Solver: the same plan as a GDR (JSON) macro beside it, for Antic's Counter
+                    // and other macro tools. GDR counts the level's first physics step as frame 1
+                    // where a plan's step counts it as 0, so every input goes out one frame later
+                    // (found by flying a shifted copy in Antic's Counter, 2026-11-12).
+                    {
+                        std::string gdr = "{\"gameVersion\":2.2081,\"version\":1.0,\"description\":\"Path Solver solution\","
+                                          "\"duration\":" + std::to_string((double)(g_cfg.inputs.back().step + 1) / 240.0)
+                                          + ",\"bot\":{\"name\":\"Path Solver\",\"version\":\""
+                                          + Mod::get()->getVersion().toVString() + "\"},\"level\":{\"id\":"
+                                          + std::to_string(g_cfg.levelId) + ",\"name\":\"\"},\"author\":\"\",\"seed\":0,"
+                                          "\"coins\":0,\"ldm\":false,\"framerate\":240.0,\"inputs\":[";
+                        bool first = true;
+                        for (const InputCmd& in : g_cfg.inputs) {
+                            if (!first) gdr += ',';
+                            first = false;
+                            gdr += "{\"frame\":" + std::to_string(in.step + 1) + ",\"btn\":1,\"2p\":"
+                                   + (in.p2 ? "true" : "false") + ",\"down\":" + (in.down ? "true" : "false") + "}";
+                        }
+                        gdr += "]}";
+                        const std::string gdrPath = std::string(DATA_DIR) + "/"
+                                                    + (g_cfg.coinFiles ? "pathsolver_coins_lv" : "pathsolver_lv")
+                                                    + std::to_string(g_cfg.levelId) + ".gdr.json";
+                        if (FILE* f = std::fopen(gdrPath.c_str(), "wb")) {
+                            std::fwrite(gdr.data(), 1, gdr.size(), f);
+                            std::fclose(f);
+                            writeResult("dpsolve: GDR macro saved -> " + gdrPath);
+                        }
+                    }
                 }
                 // ...and next to it, the map of where the rounds went (itermap.hpp), so the
                 // showing that follows -- and every later replay of this solution -- can draw
