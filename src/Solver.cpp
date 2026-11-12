@@ -433,7 +433,9 @@ void Solver::buildTable() {
     for (int d = 26; d <= 48; d += 2) nearD.push_back(d);
     for (int d = 52; d <= 96; d += 4) nearD.push_back(d);
     for (int d = 104; d <= 480; d += 8) farD.push_back(d);
-    for (int d : nearD) for (int L : {LONG, 1, 8, 24}) m_table.emplace_back(d, L);
+    // nearest-first within each length, so the common fix (one flip a few
+    // ticks earlier) is found in a handful of tries
+    for (int L : {LONG, 8, 1, 24}) for (int d : nearD) m_table.emplace_back(d, L);
     for (int d : nearD) for (int L : {2, 3, 4, 6, 12, 16, 35, 50, 80}) m_table.emplace_back(d, L);
     for (int d : farD) for (int L : {LONG, 1, 8, 24, 50}) m_table.emplace_back(d, L);
 }
