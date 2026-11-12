@@ -1,0 +1,438 @@
+#pragma once
+// On-screen HUD that stays visible while rendering is skipped.
+#include "mod/level_slice.hpp"
+#include "mod/takeover.hpp"         // the human takeover's line under the badge
+
+using namespace p1;
+
+#include "mod/touch_controls.hpp"   // Android: the on-screen buttons that stand in for the keys
+#include "mod/progress_bars.hpp"    // the solve session's bars, drawn as GD's own level bar
+
+// ---- On-screen HUD: keeps progress visible even in fast mode (render skip) ----
+// Attached to the game layer's parent (the scene), so even when PlayLayer::visit skips rendering
+// it is drawn independently by the scene's visit. Progress text sits on top of the black screen.
+// Note: the label is not cached as a raw pointer; it is looked up by tag every time. Touching a
+// raw pointer after a scene rebuild has freed the old label is UB (access violation inside
+// update -> freeze)
+constexpr int HUD_TAG = 0x51D50;
+constexpr int KEYS_TAG = 0x51D52;
+constexpr int BADGE_TAG = 0x51D53;
+constexpr int ITERMAP_TAG = 0x51D54;
+constexpr int TAKEOVER_TAG = 0x51D55;
+
+// Every overlay is one column down the LEFT edge, laid out top to bottom in a single pass.
+//
+// [2026-08-23] It used to say here that the right and bottom of getWinSize() are not reliably on
+// screen: measured in a "1706x960 worker window", a label at design y=10 did not appear at all
+// and one at design x=559 was clipped. [2026-08-28] THAT WAS THE INSTRUMENT. The display is at
+// 144 DPI, GD is DPI-aware and the capture tool was not, so the window's real client area is
+// 2560x1440 and every screenshot was cropped to the top-left 1706x960 of it. The labels were on
+// screen; they were outside the picture. Asking Windows the same question with and without DPI
+// awareness settles it, and py/gdtas/window.py now declares awareness.
+//
+// The column stays at the top-left, which is a good place for it and where everything already
+// expects to find it -- but a corner is now a corner (the iteration map's strip uses the
+// bottom-right), and nothing here should be justified by that retracted measurement again.
+struct OverlayCursor { float y; };
+
+// Fetch or create one overlay label and put it at the cursor. The cursor is NOT moved here: the
+// caller fills the label first and then calls overlayAdvance, so the row below is placed under the
+// text this frame draws. Measuring before the fill placed it under the PREVIOUS text -- nothing at
+// all on a label just created, so on a fresh scene (a level swapped in, the next level of a one-
+// session run) the bars and the keys were laid out over the session text, and a level that sat
+// paused after that first frame (no update, so no second layout) kept two blocks drawn on top of
+// each other.
+// `id` is the Geode node ID: the lookup is still by tag, but these hang off a layer the game
+// owns, so other mods need a name for them.
+inline cocos2d::CCLabelBMFont* overlayLabel(cocos2d::CCNode* parent, int tag,
+                                            const std::string& id, const char* font,
+                                            float scale, bool visible, OverlayCursor& cur) {
+    using namespace cocos2d;
+    auto* lbl = static_cast<CCLabelBMFont*>(parent->getChildByTag(tag));
+    if (!visible) {
+        if (lbl) lbl->setVisible(false);
+        return nullptr;
+    }
+    if (!lbl) {
+        lbl = CCLabelBMFont::create("", font);
+        if (!lbl) return nullptr;
+        lbl->setTag(tag);
+        lbl->setID(id);
+        lbl->setAnchorPoint({0.f, 1.f});
+        lbl->setScale(scale);
+        lbl->setZOrder(1 << 20);
+        parent->addChild(lbl);
+    }
+    lbl->setVisible(true);
+    lbl->setPositionX(10.f);
+    lbl->setPositionY(cur.y);
+    return lbl;
+}
+
+// Move the cursor past a label overlayLabel placed and the caller has filled.
+inline void overlayAdvance(cocos2d::CCLabelBMFont* lbl, OverlayCursor& cur) {
+    if (lbl) cur.y -= lbl->getContentSize().height * lbl->getScaleY() + 3.f;
+}
+
+// How the game is being advanced right now, in the words the keys use.
+// "FAST" means the fast loop owns the frames (the spectating notch does nothing there); anything
+// else is the notch the arrow keys set. Slow motion is a separate divider on dt, so it is
+// reported separately rather than folded into the multiplier.
+inline void speedText(char* out, size_t n) {
+    const bool fastLoop = g_started && !g_sessionOver && g_cfg.fastdt > 0 && !g_realtimeOverride;
+    char slow[24] = "";
+    if (g_slowmo > 1.f) snprintf(slow, sizeof(slow), "  slowmo 1/%.0f", (double)g_slowmo);
+    if (fastLoop)
+        snprintf(out, n, "FAST (%d loops/frame)%s", g_cfg.fastloops, slow);
+    else
+        snprintf(out, n, "%gx%s", (double)g_watchSpeed, slow);
+}
+
+// Keys, current speed and whether time is stopped. Hidden with F1 -- unlike the badge, this is
+// the user's to turn off. In a replay this is the ONLY line besides the badge, so the speed
+// lives here and nowhere else (it used to be printed twice).
+inline void fillKeysHud(cocos2d::CCLabelBMFont* lbl) {
+    if (!lbl) return;
+    static auto s_last = std::chrono::steady_clock::time_point{};
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last).count() < 200
+        && *lbl->getString())
+        return;
+    s_last = now;
+    char spd[64];
+    speedText(spd, sizeof(spd));
+    // The screen switch only earns its place in a solve: there it hands the frames back to the
+    // fast loop, which is most of the speed. In a replay there is nothing to hand them to and
+    // nothing to gain by not looking at the run, so neither the key nor the state is shown.
+    //
+    // The whole SESSION, matching the key's own condition. Listing it only while the search
+    // thread happens to be running meant that the one moment you needed it -- the screen dark,
+    // the solve stopped -- was the moment it was not on the list.
+    const bool showRender = solveSession();
+    char renderPart[32] = "";
+    char renderLine[40] = "";
+    if (showRender) {
+        snprintf(renderPart, sizeof(renderPart), "        RENDER %s",
+                 renderingOn() ? "on" : "off");
+        snprintf(renderLine, sizeof(renderLine), "%s   render on / off\n",
+                 keyName(Key::Render).c_str());
+    }
+    // Why time is stopped, not just that it is. A solve holds the level still for the whole of
+    // every search (repair.hpp's spawn) and with the screen on that is most of what you watch --
+    // reported 2026-08-28 as the run "going to PAUSE by itself". It is not the F2 stop and it is
+    // not waiting for the operator to do anything, so it does not get the same word.
+    const char* stopPart = probe::g_pause ? "  [PAUSED]"
+                         : !g_paused      ? ""
+                         : solvingNow()   ? "  [HELD - SEARCHING]"
+                                          : "  [PAUSED]";
+#ifndef GEODE_IS_WINDOWS
+    // No keyboard: the buttons carry their own names (touch_controls.hpp), so what is left to say
+    // is the state they act on -- the speed, whether time is stopped, and what the arrows do now.
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "SPEED  %s%s%s\n< >  %s\nMAP  %s",
+                 spd, stopPart, renderPart,
+                 showingSolve()                ? "(disabled while solving)"
+                 : (g_paused || probe::g_pause) ? "step back / forward (10 substeps)"
+                                                : "seek back / forward (hold to accelerate)",
+                 itermap::mapWanted() ? "on" : "off");
+        lbl->setString(buf);
+        return;
+    }
+#endif
+    // Listed in key order. Anything else reads as a jumble -- there is no other order a reader
+    // can predict, and this list is scanned, not read.
+    // The key names are read from the bindings rather than spelled out, since they can be rebound.
+    char buf[768];
+    snprintf(buf, sizeof(buf),
+        "SPEED  %s%s%s\n"
+        "%s   hide this overlay%s\n"
+        "%s   pause / resume\n"
+        "%s / %s   step 1 / 10 substeps (hold to repeat)\n"
+        "%s"
+        "%s   hitboxes: off / on / only\n"
+        "%s   replay from the start\n"
+        "%s   quit to the level screen\n"
+        "%s  iteration map: %s\n"
+        "%s / %s   %s\n"
+        "%s / %s   speed up / down   -   or drag the bar",
+        spd, stopPart, renderPart,
+        keyName(Key::Overlay).c_str(),
+        showingSolve() ? "  (disabled while solving)" : "",
+        keyName(Key::Pause).c_str(),
+        keyName(Key::Step1).c_str(), keyName(Key::Step10).c_str(),
+        renderLine,
+        keyName(Key::Hitboxes).c_str(),
+        keyName(Key::Replay).c_str(),
+        keyName(Key::Quit).c_str(),
+        keyName(Key::Itermap).c_str(), itermap::mapWanted() ? "on" : "off",
+        keyName(Key::SeekBack).c_str(), keyName(Key::SeekForward).c_str(),
+        // The arrows change job with the stop: seeking needs time to flow, so while it is frozen
+        // they are frame-step keys instead. Saying which they are right now costs one word. While
+        // the loop owns the level they are neither -- both would move a round it is measuring.
+        showingSolve()                ? "(disabled while solving)"
+        : (g_paused || probe::g_pause) ? "step back / forward (10 substeps)"
+                                       : "seek back / forward (hold to accelerate)",
+        keyName(Key::Faster).c_str(), keyName(Key::Slower).c_str());
+    lbl->setString(buf);
+}
+
+// The bot badge. Shown whenever the mod is driving, and NOT hidden by F1 or by cfg `hud=0`:
+// spec §9 asks that a replay be visibly a replay, so this one is not the user's to turn off.
+// It is the only overlay with that property, and it is the only place the product name appears
+// (the session HUD under it used to repeat it).
+// The level is deliberately NOT in it: at this font size the badge was wide enough to sit on
+// top of the progress bar underneath, and the level is already in the window title and in the
+// session block. What the badge is for is saying that this run is a bot's -- and which version
+// of the mod's: a screenshot or a recording then says what produced the run. The version is the
+// mod's own (mod.json, as the play menu reads it), never a literal.
+inline void fillBotBadge(cocos2d::CCLabelBMFont* lbl) {
+    if (!lbl) return;
+    static int s_wasMode = -1;
+    static const std::string s_version = geode::Mod::get()->getVersion().toVString();
+    // The whole solve session, not only the moments the search thread is running. The loop
+    // alternates searching with replaying its own candidates, and a badge driven by the narrow
+    // predicate flipped to REPLAY and back on every iteration -- which reads as the mod changing
+    // mode a dozen times rather than getting on with one job.
+    // A person playing through a takeover (mod/takeover.hpp) is still a bot session -- nothing it
+    // does is recorded -- and the badge says whose input it is.
+    const int mode = showingSolve() ? 1 : takeover::personDriving() ? 2 : 0;
+    if (!*lbl->getString() || mode != s_wasMode) {
+        s_wasMode = mode;
+        const std::string text = "GDSOLVER BOT " + s_version
+                               + (mode == 1 ? " - SOLVING" : mode == 2 ? " - HUMAN INPUT" : " - REPLAY");
+        lbl->setString(text.c_str());
+    }
+}
+
+// The badge's size: 0.28 of bigFont, and smaller where GD's own progress bar would reach it. That
+// bar sits at the top centre, 210 pt wide, on the badge's line, and a window's width in points
+// follows its aspect ratio, so the room left of it does too. Measured with the badge at 0.35
+// (x 10.0 to 197.4): the bar starts at x 179.5 in a 16:9 window, 151.0 at 16:10 and 135.0 at 4:3,
+// so 0.35 sat on the bar at every ratio and 0.28 (right edge at 160) still does at 16:10 and 4:3.
+// The bar's left edge is the window's centre less 105 at all three, so it is taken from the window
+// size alone, and no game node is read here: an overlay has no business computing world transforms
+// on the game's own nodes. One window always gets one size, shown bar or not.
+constexpr float kBadgeScale = 0.28f;
+constexpr float kBadgeMinScale = 0.15f;
+constexpr float kGdBarHalfWidth = 105.f;
+inline void fitBotBadge(cocos2d::CCLabelBMFont* lbl) {
+    using namespace cocos2d;
+    if (!lbl) return;
+    float s = kBadgeScale;
+    const float w = lbl->getContentSize().width;
+    if (w > 0.f) {
+        const float barLeft = CCDirector::sharedDirector()->getWinSize().width * 0.5f - kGdBarHalfWidth;
+        const float room = barLeft - 6.f - lbl->getPositionX();
+        if (room < w * s) s = std::max(kBadgeMinScale, room / w);
+    }
+    if (lbl->getScale() != s) lbl->setScale(s);
+}
+
+// ---- The progress bars ----
+// (A solve session's bars are drawn now, progress_bars.hpp; the text bar below is the external
+// driver's HUD only.)
+// The bars are spelled out in text inside the HUD label, and chatFont (Aller) is PROPORTIONAL, so
+// the two glyphs must have the same advance or the bar grows sideways as it fills -- which also
+// makes it lie: '#' is 12 units against '.' at 4, so a half-full 20-cell bar covered three
+// quarters of its own width, and everything printed after it slid right as the run progressed.
+//
+// [2026-08-28] Measured over Resources/chatFont.fnt and its -hd / -uhd variants (the game picks
+// one by texture quality, so a pair has to match in all three). Characters whose advance is equal
+// at every resolution fall into a handful of groups; exactly one of them holds both an inked and
+// an empty glyph: ' ' '.' ':' ';' at 4 / 8 / 16 units. Every heavier glyph -- '#' at 12/24/32
+// included -- has a width nothing light shares. So the fill is ';' on a '.' track: the densest of
+// that group against the lightest. A cell is 4 units now instead of 12, so the count is doubled to
+// keep the band a band -- 40 cells hold at 160 units, between the old bar's 80 empty and 240 full,
+// which is to say no line here got longer than it already was.
+//
+// The numbers after the bar still shift a little -- '1' is 10 units against a pad space's 4, and
+// the detail text changes width on its own -- but that is the tail of the line moving, not a box
+// that grows while it fills.
+//
+// GD does ship a true monospace (gjFont52, "Public Pixel", advance == size for all of ASCII at
+// every resolution), but at equal glyph height its lines run ~20% wider, and the widest line here
+// is already 430 of the 569 design px across. Not worth redrawing the whole overlay for a bar.
+constexpr char BAR_FILL = ';';
+constexpr char BAR_TRACK = '.';
+constexpr int BAR_CELLS = 40;
+
+// The fraction a bar shows, clamped to [0,1]: the spans here are estimates (a search may stop
+// early, a replay may run past the last object), and a bar drawn wider than its own box reads as
+// a bug in the thing being measured.
+inline double barFraction(double done, double total) {
+    if (!(total > 0.0)) return 0.0;
+    const double f = done / total;
+    return (f < 0.0) ? 0.0 : (f > 1.0 ? 1.0 : f);
+}
+
+// Spell one bar's cells into `out`, which needs BAR_CELLS + 1 bytes. `f` is already clamped.
+inline void barCells(char* out, double f) {
+    const int fill = (int)(f * BAR_CELLS + 0.5);
+    for (int i = 0; i < BAR_CELLS; ++i) out[i] = (i < fill) ? BAR_FILL : BAR_TRACK;
+    out[BAR_CELLS] = 0;
+}
+
+// What the solver is doing. Solve sessions only: a replay has nothing to report that the badge
+// and the key line do not already say.
+// One "label  41%   detail" line, newline-terminated. Returns how much was written so the
+// caller can keep appending into the same buffer. The bars themselves are drawn
+// (progress_bars.hpp); the text keeps the numbers.
+inline int barLine(char* out, size_t cap, const char* label,
+                   double done, double total, const char* detail) {
+    if (cap == 0) return 0;
+    const double f = barFraction(done, total);
+    const int n = snprintf(out, cap, "%s %5.1f%%   %s\n", label, f * 100.0, detail);
+    if (n < 0) return 0;
+    return (n < (int)cap) ? n : (int)cap - 1;
+}
+
+inline void fillSessionHud(cocos2d::CCLabelBMFont* hud) {
+    using namespace cocos2d;
+    if (!hud) return;
+    // setString rebuilds the glyph sprites, so every frame is heavy (drops the spectating FPS).
+    // Refreshing the display every 0.25 seconds is enough
+    static auto s_lastHud = std::chrono::steady_clock::time_point{};
+    auto nowHud = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(nowHud - s_lastHud).count() < 250
+        && *hud->getString())
+        return;
+    s_lastHud = nowHud;
+    auto sec = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - solver::g_solveStart).count();
+    float len = 0.f;
+    if (auto* pl = PlayLayer::get()) len = pl->m_levelLength;
+    char coinLine[80] = "";
+    if (g_cfg.coinMode) {
+        // Either witness, per coin: the coarse load-position test never counts a coin a Move
+        // carries away (SubZero 4002's third, dropped 600 px), so alone it read 0/3 while GD was
+        // taking it; GD's own call (coingd:) can be suppressed on a later attempt by its
+        // collected-coin dictionary (hooks_playlayer.cpp). ...and the most any attempt of this
+        // level has had, this one included (solver::g_coinBest).
+        const size_t got = solver::coinsThisAttempt();
+        const size_t best = std::max(solver::g_coinBest, got);
+        snprintf(coinLine, sizeof(coinLine), "coins %zu/%zu this attempt   best %zu/%zu\n", got,
+                 solver::g_coins.size(), best, solver::g_coins.size());
+    }
+    float px = 0.f;
+    if (auto* pl = PlayLayer::get()) if (pl->m_player1) px = pl->m_player1->getPositionX();
+    // In-process solve (the panel's Solve mode): there is no external driver writing hud.txt, so
+    // the loop fills the same numbers itself and this block reads them.
+    //
+    // TWO PROGRESSES, because they answer different questions and conflating them was actively
+    // misleading. `level` is how far into the level the run has actually got -- the deepest point
+    // a replay reached, so it only ever grows and it is the same yardstick as the game's own
+    // percentage. `search` is how much of the current search is left. The old single bar was the
+    // frontier leader's x over the level, which reached 100% without the search ending (getting
+    // to the end of the level is not the same as proving a route through it) and walked backwards
+    // whenever the frontier was pruned or a tail started from a re-anchor further back.
+    if (showingSolve() && g_cfg.dpSolve) {
+        const dpbridge::SolveProgress pr = dpbridge::progress();
+        const double lvl = (len > 1.f) ? (double)len : 0.0;
+        char b[480];
+        int n = snprintf(b, sizeof(b), "iter %d   %s   %llds\n%s",
+                         g_hudIter, g_hudPhase.empty() ? "starting" : g_hudPhase.c_str(),
+                         (long long)sec, coinLine);
+        char detail[192];
+        snprintf(detail, sizeof(detail), "best x %.0f / %.0f",
+                 (double)g_hudVerifiedX, lvl);
+        n += barLine(b + n, sizeof(b) - n, "level ", (double)g_hudVerifiedX, lvl, detail);
+        if (pr.running) {
+            // Ticks, not x: the span is exactly the work the search will do, so the bar is
+            // monotone and 100% coincides with the search ending. The frontier's x is still
+            // shown, as a number, because that is where the plan being built has reached
+            snprintf(detail, sizeof(detail), "tick %lld / %lld   x %.0f   states %zu",
+                     pr.tick, pr.horizon, pr.x, pr.alive);
+            n += barLine(b + n, sizeof(b) - n, "search",
+                         (double)(pr.tick - pr.from), (double)(pr.horizon - pr.from), detail);
+        } else {
+            snprintf(b + n, sizeof(b) - n, "now    x %.0f  (%.1f%%)   anchor t=%lld x=%.0f",
+                     (double)px, lvl > 0.0 ? px / lvl * 100.0 : 0.0,
+                     (long long)g_hudAnchorT, (double)g_hudAnchorX);
+        }
+        hud->setString(b);
+        return;
+    }
+    // Progress is "how far the GD-verified prefix has grown". The numbers are written by the
+    // external driver to data/hud.txt; this only displays them
+    const double nowPct = (len > 1.f) ? (px / len * 100.0) : 0.0;
+    const double vPct = (len > 1.f && g_hudVerifiedX > 0)
+                      ? (g_hudVerifiedX / len * 100.0) : 0.0;
+    // Bar of the verified prefix
+    char bar[BAR_CELLS + 1];
+    barCells(bar, barFraction(vPct, 100.0));
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "iter %d   %s\n"
+        "%s"
+        "[%s] %.1f%%\n"
+        "verified  x=%.0f / %.0f\n"
+        "anchor    t=%lld  x=%.0f   fixups %d/%d\n"
+        "now       x=%.0f  (%.1f%%)   %llds",
+        g_hudIter, g_hudPhase.empty() ? "starting" : g_hudPhase.c_str(),
+        coinLine,
+        bar, vPct,
+        (double)g_hudVerifiedX, (double)len,
+        (long long)g_hudAnchorT, (double)g_hudAnchorX,
+        g_hudFixups, g_hudFixupCap,
+        (double)px, nowPct, (long long)sec);
+    hud->setString(buf);
+}
+
+// One layout pass over every overlay: a single column down the top-left, in draw order.
+// Called once per frame from the game layer's update.
+inline void updateOverlays(cocos2d::CCNode* gameLayer) {
+    using namespace cocos2d;
+    CCNode* parent = gameLayer ? gameLayer->getParent() : nullptr;
+    if (!parent) return;
+    OverlayCursor cur{CCDirector::sharedDirector()->getWinSize().height - 4.f};
+    // 1. the bot badge -- neither F1 nor cfg hud=0 reaches it (spec 9)
+    auto* badge = overlayLabel(parent, BADGE_TAG, "bot-badge"_spr, "bigFont.fnt", kBadgeScale,
+                               botDriving(), cur);
+    fillBotBadge(badge);
+    fitBotBadge(badge);
+    overlayAdvance(badge, cur);
+    // 1b. the human takeover: whose input it is and how to end it. Like the badge, not the
+    //     user's to hide -- it is the only place the end key is named while a person plays.
+    {
+        const std::string tk = botDriving() ? takeover::hudText() : std::string();
+        auto* lbl = overlayLabel(parent, TAKEOVER_TAG, "takeover-hud"_spr, "chatFont.fnt", 0.6f,
+                                 !tk.empty(), cur);
+        if (lbl) {
+            if (tk != lbl->getString()) lbl->setString(tk.c_str());
+            overlayAdvance(lbl, cur);
+        }
+    }
+    const bool show = g_hudOn && !g_overlayHidden;
+    // 2. what the solver is doing (solve sessions only)
+    //    Visible for the whole solve, not only while the search thread runs: the loop's
+    //    verification replays are part of the solve, and a block that vanished for each one made
+    //    the overlay flicker between two layouts once per iteration. It goes away for the
+    //    finale, which is a replay and shows only the badge, the keys and the speed.
+    //
+    //    It also stays up after the session ends. A solve that gave up leaves the level standing
+    //    at the point it stopped, and the one thing worth reading then is how far it got.
+    auto* session = overlayLabel(parent, HUD_TAG, "session-hud"_spr, "chatFont.fnt", 0.6f,
+                                 show && showingSolve(), cur);
+    fillSessionHud(session);
+    overlayAdvance(session, cur);
+    //    ...and its two drawn bars, as the next row of the column (progress_bars.hpp)
+    progressbars::updateBars(parent, show, cur.y);
+    // 3. the keys, the current speed and whether time is stopped. Only while the mod is
+    //    driving: during ordinary play these keys do nothing, and a legend for them on screen
+    //    reads as "the mod is running something", which is exactly the wrong impression
+    auto* keys = overlayLabel(parent, KEYS_TAG, "keys-hud"_spr, "chatFont.fnt", 0.5f,
+                              show && botDriving(), cur);
+    fillKeysHud(keys);
+    overlayAdvance(keys, cur);
+    // 4. the iteration map (F10). It owns its own corner rather than joining this column: the
+    //    strip is a timeline of the whole level and the column reaches the middle of the screen,
+    //    where a timeline sits on top of the thing it is a timeline OF. It takes no part in the
+    //    cursor above, so turning it on cannot move any of the lines already there.
+    itermap::draw(parent, PlayLayer::get());
+#ifndef GEODE_IS_WINDOWS
+    // 5. the buttons standing in for the keys. Not hidden by the TEXT button (it would hide
+    //    itself), only folded by their own top button.
+    touchpad::update(parent);
+#endif
+}

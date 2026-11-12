@@ -1,0 +1,410 @@
+[
+ {
+  "x0": 300.0,
+  "x1": 1200.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   720.0,
+   105.0
+  ],
+  "target": [
+   720.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 539,
+  "t_pad": 530
+ },
+ {
+  "x0": 1200.0,
+  "x1": 2100.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   1620.0,
+   105.0
+  ],
+  "target": [
+   1620.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 1,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 1232,
+  "t_pad": 1223
+ },
+ {
+  "x0": 2100.0,
+  "x1": 3000.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   2520.0,
+   105.0
+  ],
+  "target": [
+   2520.0,
+   150.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 2,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 1925,
+  "t_pad": 1916
+ },
+ {
+  "x0": 3000.0,
+  "x1": 3900.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   3420.0,
+   105.0
+  ],
+  "target": [
+   3420.0,
+   150.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 3,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 2619,
+  "t_pad": 2609
+ },
+ {
+  "x0": 3900.0,
+  "x1": 4800.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   4320.0,
+   105.0
+  ],
+  "target": [
+   4320.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 1,
+  "press_len": 40,
+  "t_press": 3287,
+  "t_pad": 3303
+ },
+ {
+  "x0": 4800.0,
+  "x1": 5700.0,
+  "mode": "ship",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   5220.0,
+   105.0
+  ],
+  "target": [
+   5220.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 4005,
+  "t_pad": 3996
+ },
+ {
+  "x0": 5700.0,
+  "x1": 6600.0,
+  "mode": "ball",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   6120.0,
+   105.0
+  ],
+  "target": [
+   6120.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 4698,
+  "t_pad": 4689
+ },
+ {
+  "x0": 6600.0,
+  "x1": 7500.0,
+  "mode": "ufo",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   7020.0,
+   105.0
+  ],
+  "target": [
+   7020.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 5392,
+  "t_pad": 5382
+ },
+ {
+  "x0": 7500.0,
+  "x1": 8400.0,
+  "mode": "wave",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   7920.0,
+   105.0
+  ],
+  "target": [
+   7920.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 6085,
+  "t_pad": 6076
+ },
+ {
+  "x0": 8400.0,
+  "x1": 9300.0,
+  "mode": "robot",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   8820.0,
+   105.0
+  ],
+  "target": [
+   8820.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 6778,
+  "t_pad": 6769
+ },
+ {
+  "x0": 9300.0,
+  "x1": 10200.0,
+  "mode": "spider",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   9720.0,
+   105.0
+  ],
+  "target": [
+   9720.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 7471,
+  "t_pad": 7462
+ },
+ {
+  "x0": 10200.0,
+  "x1": 11100.0,
+  "mode": "swing",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   10620.0,
+   105.0
+  ],
+  "target": [
+   10620.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 8165,
+  "t_pad": 8155
+ },
+ {
+  "x0": 11100.0,
+  "x1": 12000.0,
+  "mode": "cube",
+  "mini": 1,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   11520.0,
+   105.0
+  ],
+  "target": [
+   11520.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 8862,
+  "t_pad": 8853
+ },
+ {
+  "x0": 12000.0,
+  "x1": 12900.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   12420.0,
+   105.0
+  ],
+  "target": [
+   12420.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 1,
+  "t_press": 9551,
+  "t_pad": 9542
+ },
+ {
+  "x0": 12900.0,
+  "x1": 13800.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   13320.0,
+   105.0
+  ],
+  "target": [
+   13320.0,
+   200.0
+  ],
+  "dx": 0.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 2,
+  "t_press": 10244,
+  "t_pad": 10235
+ },
+ {
+  "x0": 13800.0,
+  "x1": 14700.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   14220.0,
+   105.0
+  ],
+  "target": [
+   14280.0,
+   200.0
+  ],
+  "dx": 60.0,
+  "ignx": 1,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 10938,
+  "t_pad": 10928
+ },
+ {
+  "x0": 14700.0,
+  "x1": 15600.0,
+  "mode": "cube",
+  "mini": 0,
+  "flip": 0,
+  "ceil_bottom": 330.0,
+  "orb": [
+   15120.0,
+   105.0
+  ],
+  "target": [
+   15180.0,
+   200.0
+  ],
+  "dx": 60.0,
+  "ignx": 0,
+  "igny": 0,
+  "grav": 0,
+  "hold_through": 0,
+  "press_len": 3,
+  "t_press": 11631,
+  "t_pad": 11622
+ }
+]

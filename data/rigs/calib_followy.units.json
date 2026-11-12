@@ -1,0 +1,270 @@
+[
+ {
+  "x0": 300.0,
+  "x1": 1200.0,
+  "mode": "cube",
+  "group": 200,
+  "speed": 1.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 540.0,
+  "marks": [
+   [
+    480.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 416
+ },
+ {
+  "x0": 1200.0,
+  "x1": 2100.0,
+  "mode": "ship",
+  "group": 201,
+  "speed": 1.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 1440.0,
+  "marks": [
+   [
+    1380.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    2,
+    40
+   ],
+   [
+    10,
+    30
+   ],
+   [
+    16,
+    30
+   ]
+  ],
+  "t_pad": 1110
+ },
+ {
+  "x0": 2100.0,
+  "x1": 3000.0,
+  "mode": "cube",
+  "group": 202,
+  "speed": 0.5,
+  "delay": 0.0,
+  "offset": 30,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 2340.0,
+  "marks": [
+   [
+    2280.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 1803
+ },
+ {
+  "x0": 3000.0,
+  "x1": 3900.0,
+  "mode": "cube",
+  "group": 203,
+  "speed": 1.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 1.0,
+  "dur": 2,
+  "trig_x": 3240.0,
+  "marks": [
+   [
+    3180.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 2496
+ },
+ {
+  "x0": 3900.0,
+  "x1": 4800.0,
+  "mode": "cube",
+  "group": 204,
+  "speed": 1.0,
+  "delay": 0.1,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 4140.0,
+  "marks": [
+   [
+    4080.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 3189
+ },
+ {
+  "x0": 4800.0,
+  "x1": 5700.0,
+  "mode": "cube",
+  "group": 205,
+  "speed": 10.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 5040.0,
+  "marks": [
+   [
+    4980.0,
+    105.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 3883
+ },
+ {
+  "x0": 5700.0,
+  "x1": 6600.0,
+  "mode": "ship",
+  "group": 206,
+  "speed": 1.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 5940.0,
+  "marks": [
+   [
+    5880.0,
+    105.0
+   ]
+  ],
+  "portal": "cube",
+  "portal_x": 6420.0,
+  "portal_y": 300.0,
+  "presses": [
+   [
+    2,
+    40
+   ],
+   [
+    10,
+    30
+   ],
+   [
+    16,
+    30
+   ]
+  ],
+  "t_pad": 4576
+ },
+ {
+  "x0": 6600.0,
+  "x1": 7500.0,
+  "mode": "cube",
+  "group": 207,
+  "speed": 1.0,
+  "delay": 0.0,
+  "offset": 0,
+  "vmax": 0.0,
+  "dur": 2,
+  "trig_x": 6840.0,
+  "marks": [
+   [
+    6780.0,
+    300.0
+   ],
+   [
+    6750.0,
+    60.0
+   ]
+  ],
+  "portal": null,
+  "portal_x": null,
+  "portal_y": null,
+  "presses": [
+   [
+    4,
+    3
+   ],
+   [
+    12,
+    3
+   ]
+  ],
+  "t_pad": 5269
+ }
+]

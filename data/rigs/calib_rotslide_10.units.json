@@ -1,0 +1,14 @@
+[
+ {
+  "x0": 0.0,
+  "x1": 1000.0,
+  "mode": "ship",
+  "speed": "4x",
+  "dontslide_1": 1,
+  "dontslide_2": 0,
+  "t_swap1": 251,
+  "t_swap2": 272,
+  "gd_abs_yvel_after_1": 6.4,
+  "gd_abs_yvel_after_2": 9.497
+ }
+]

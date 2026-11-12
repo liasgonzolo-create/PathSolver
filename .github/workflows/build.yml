@@ -1,0 +1,62 @@
+# Windows, and Android as an experiment (docs/ANDROID.md). The Android job may fail while the
+# port is under way and never decides the run; only the Windows package is attached to a release,
+# and only to a full one: the Android build is published by hand as a separate pre-release, and a
+# pre-release gets no Windows package (it would sit beside, or overwrite, the Android one).
+# The other platforms in Geode's example workflow cannot build this.
+#
+# The point of building here rather than locally is that the binary attached to a release can be
+# traced to a commit of the public tree. The pitfalls page asks for it for that reason ("makes it
+# easier for us to verify that a mod has not been tampered with").
+#
+# This can only prove the mod compiles. The behaviour bar -- py/quick_regress.py and the cold
+# regression -- needs Geometry Dash itself, so it stays a local step.
+name: Build the mod (GD 2.2081, Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+  pull_request:
+  # Not on tag push: the release does not exist yet at that point and the upload below would have
+  # nowhere to go. Publishing the release is the event that wants a binary.
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `sdk: given` (the default) takes the Geode version out of mod.json, so CI and a desk
+      # build are the same SDK without a second place to keep it up to date.
+      # The bindings are pinned to the commit the desk builds use: the action otherwise takes the
+      # bindings repo's latest main, and a change there on 2026-10-06 made GJGameState's copy
+      # assignment implicitly deleted, which src/solver/psnap.hpp relies on.
+      - name: Build the mod
+        id: build
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          bindings-ref: f050fd74ad531b0827377c97510cb807903ff1b3
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: geode-package
+          path: ${{ steps.build.outputs.build-output }}
+
+      # The file is named after the mod id, so it is matched rather than spelled out -- the id
+      # changed once already and took four hardcoded copies of the old name with it.
+      - name: Attach it to the release
+        if: github.event_name == 'release' && !github.event.release.prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ steps.build.outputs.build-output }}"/*.geode --clobber
