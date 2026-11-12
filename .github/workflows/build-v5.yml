@@ -1,4 +1,4 @@
-name: Build Geode Mod
+name: Build for GD 2.2081 (Geode 5)
 
 on:
   workflow_dispatch:
@@ -7,25 +7,20 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - name: Windows
-            os: windows-latest
-          - name: Android64
-            os: ubuntu-latest
-            target: Android64
-    name: ${{ matrix.config.name }}
-    runs-on: ${{ matrix.config.os }}
+    name: Windows
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set target versions
+        shell: bash
+        run: |
+          echo 'using mod.json as is'
+          grep -n '"geode"\|"win"' mod.json
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
           combine: true
-          sdk: latest
-          target: ${{ matrix.config.target }}
+          sdk: given
 
   package:
     name: Package builds
@@ -36,5 +31,5 @@ jobs:
         id: build
       - uses: actions/upload-artifact@v4
         with:
-          name: Build Output
+          name: PathSolver-v5
           path: ${{ steps.build.outputs.build-output }}
