@@ -699,6 +699,11 @@ struct Config {
     // on every n-th tick; repair.hpp baseArgs lifts it again once the loop escalates to a
     // capacity tier or restarts. 2 by default, measured with dpcapladder above.
     int dpInputGrid = 2;
+    // `dpminpulse` (0 = off), also the mod setting "human-min-click": pass --minpulse <n> so the
+    // button holds or releases for at least n ticks (240 per second) before it changes again.
+    // That removes the 1-2 tick taps a search may use that no hand could place. Like the grid,
+    // repair.hpp baseArgs lifts it when the loop escalates, so it can slow a solve but never wall it.
+    int dpMinPulse = 0;
     // cfg `dpphaseprof` (print only): time every call into dp (`dpcall:`) and pass --phaseprof to
     // the searches (`phaseprof: ... prep=`) -- repair.hpp timedSolve.
     bool dpPhaseProf = false;

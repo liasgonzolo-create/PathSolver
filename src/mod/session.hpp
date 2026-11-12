@@ -605,6 +605,7 @@ inline bool loadDpCfg(const std::string& key, const std::string& val) {
     else if (key == "gtrollcheck") cfgNum(key, val, g_cfg.gtRollCheck);
     else if (key == "dpplainbeside") cfgNum(key, val, g_cfg.dpPlainBeside);
     else if (key == "dpinputgrid") cfgNum(key, val, g_cfg.dpInputGrid);
+    else if (key == "dpminpulse") cfgNum(key, val, g_cfg.dpMinPulse);
     else if (key == "dpphaseprof") g_cfg.dpPhaseProf = (val == "1");
     else if (key == "memcensus") g_cfg.memCensus = (val == "1");
     else if (key == "dpspentpad") g_cfg.dpSpentPad = (val == "1");

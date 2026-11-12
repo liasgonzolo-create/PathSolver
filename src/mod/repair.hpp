@@ -2890,6 +2890,12 @@ inline std::vector<std::string> baseArgs(const std::string& out,
         a.push_back("--inputgrid");
         a.push_back(std::to_string(g_cfg.dpInputGrid));
     }
+    // Human style: no button change closer than dpMinPulse ticks to the last one. Dropped once
+    // the loop escalates, so a level that needs a frame-tight tap still solves (and the log says so).
+    if (g_cfg.dpMinPulse > 1 && g_capTier == 0 && !g_coldRestarted) {
+        a.push_back("--minpulse");
+        a.push_back(std::to_string(g_cfg.dpMinPulse));
+    }
     for (const std::string& s : g_cfg.dpArgs) a.push_back(s);
     // An input grid (cfg dpinputgrid, or dparg=--inputgrid) is a cheap search, not the loop's
     // last word: once the loop has escalated to a capacity tier or thrown the prefix away, the
@@ -6337,6 +6343,9 @@ inline void start(GJBaseGameLayer* l) {
     // cfg dpplainbeside when it is given, else the settings menu's "Solve faster" (the gamble).
     // Read here, on the game's thread, once for the session.
     const int menuMode = Mod::get()->getSettingValue<bool>("solve-gamble") ? 3 : 0;
+    // The settings page's "Human style": a cfg dpminpulse in autorun.cfg keeps the last word.
+    if (g_cfg.dpMinPulse == 0)
+        g_cfg.dpMinPulse = (int)Mod::get()->getSettingValue<int64_t>("human-min-click");
     g_plainBesideMode = g_cfg.dpPlainBeside >= 0 ? g_cfg.dpPlainBeside : menuMode;
     if (g_plainBesideMode == 3)
         writeResult("dpsolve: solving under the gamble (dpplainbeside=3): the plain search is "

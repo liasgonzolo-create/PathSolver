@@ -1,119 +1,127 @@
 {
-	"geode": "5.10.1",
-	"gd": {
-		"win": "2.2081",
-		"android": "2.2081"
-	},
-	"id": "pathsolver.path-solver",
-	"name": "Path Solver",
-	"version": "v2.0.0-alpha.1",
-	"developers": [
-		"PathSolver",
-		"The gdsolver authors (upstream, MIT)"
-	],
-	"description": "Automatic TAS pathfinder for Geometry Dash, built on GD Solver (a reachability DP proposes input plans, the game verifies them). Frame-perfect macros you can count in Antic's Counter.",
-	"tags": [
-		"gameplay",
-		"utility",
-		"offline",
-		"cheat"
-	],
-	"links": {
-		"source": "https://github.com/liasgonzolo-create/PathSolver"
-	},
-	"issues": {
-		"info": "Report problems on the GitHub issue tracker.",
-		"url": "https://github.com/liasgonzolo-create/PathSolver/issues"
-	},
-	"settings": {
-		"play-menu": {
-			"type": "bool",
-			"name": "Choose the mode on Play",
-			"description": "A level's play button opens a menu: Normal, Replay or Solve. Off, the play button just plays the level, as without the mod.",
-			"default": true
-		},
-		"solve-gamble": {
-			"type": "bool",
-			"name": "Solve faster (not reproducible)",
-			"description": "The search takes a shortcut as soon as it will do instead of waiting for its full ladder. Usually faster, but the same level can take a different route and time from one solve to the next, and it is no more certain to be solved. Every plan is still checked by the game itself. Takes effect at the next Solve.",
-			"default": false
-		},
-		"key-overlay": {
-			"type": "keybind",
-			"name": "Hide the overlay",
-			"description": "Refused while solving, and it never hides the bot badge.",
-			"default": "F1"
-		},
-		"key-pause": {
-			"type": "keybind",
-			"name": "Pause / resume",
-			"default": "F2"
-		},
-		"key-step1": {
-			"type": "keybind",
-			"name": "Step one substep",
-			"description": "Held down, it repeats.",
-			"default": "F3"
-		},
-		"key-step10": {
-			"type": "keybind",
-			"name": "Step ten substeps",
-			"description": "Held down, it repeats.",
-			"default": "F4"
-		},
-		"key-render": {
-			"type": "keybind",
-			"name": "Rendering on / off",
-			"description": "Only during a solve, where the frames go back to the fast loop. A replay you cannot see is not a replay.",
-			"default": "F5"
-		},
-		"key-hitboxes": {
-			"type": "keybind",
-			"name": "Hitboxes: off / on / only",
-			"default": "F6"
-		},
-		"key-replay": {
-			"type": "keybind",
-			"name": "Replay from the start",
-			"default": "F7"
-		},
-		"key-quit": {
-			"type": "keybind",
-			"name": "Quit to the level screen",
-			"default": "F9"
-		},
-		"key-itermap": {
-			"type": "keybind",
-			"name": "The iteration map",
-			"default": "F10"
-		},
-		"key-faster": {
-			"type": "keybind",
-			"name": "Spectating speed up",
-			"default": "Up"
-		},
-		"key-slower": {
-			"type": "keybind",
-			"name": "Spectating speed down",
-			"default": "Down"
-		},
-		"key-seek-back": {
-			"type": "keybind",
-			"name": "Seek back",
-			"description": "A frame step instead while the game is stopped. Refused during a solve.",
-			"default": "Left"
-		},
-		"key-seek-forward": {
-			"type": "keybind",
-			"name": "Seek forward",
-			"description": "A frame step instead while the game is stopped. Refused during a solve.",
-			"default": "Right"
-		},
-		"key-takeover-end": {
-			"type": "keybind",
-			"name": "End the human takeover",
-			"description": "Debugging: ends a takeover session started with cfg takeover= and closes its records.",
-			"default": "F8"
-		}
-	}
+  "geode": "5.10.1",
+  "gd": {
+    "win": "2.2081",
+    "android": "2.2081"
+  },
+  "id": "pathsolver.path-solver",
+  "name": "Path Solver",
+  "version": "v2.0.0-alpha.1",
+  "developers": [
+    "PathSolver",
+    "The gdsolver authors (upstream, MIT)"
+  ],
+  "description": "Automatic TAS pathfinder for Geometry Dash, built on GD Solver (a reachability DP proposes input plans, the game verifies them). Frame-perfect macros you can count in Antic's Counter.",
+  "tags": [
+    "gameplay",
+    "utility",
+    "offline",
+    "cheat"
+  ],
+  "links": {
+    "source": "https://github.com/liasgonzolo-create/PathSolver"
+  },
+  "issues": {
+    "info": "Report problems on the GitHub issue tracker.",
+    "url": "https://github.com/liasgonzolo-create/PathSolver/issues"
+  },
+  "settings": {
+    "play-menu": {
+      "type": "bool",
+      "name": "Choose the mode on Play",
+      "description": "A level's play button opens a menu: Normal, Replay or Solve. Off, the play button just plays the level, as without the mod.",
+      "default": true
+    },
+    "solve-gamble": {
+      "type": "bool",
+      "name": "Solve faster (not reproducible)",
+      "description": "The search takes a shortcut as soon as it will do instead of waiting for its full ladder. Usually faster, but the same level can take a different route and time from one solve to the next, and it is no more certain to be solved. Every plan is still checked by the game itself. Takes effect at the next Solve.",
+      "default": false
+    },
+    "key-overlay": {
+      "type": "keybind",
+      "name": "Hide the overlay",
+      "description": "Refused while solving, and it never hides the bot badge.",
+      "default": "F1"
+    },
+    "key-pause": {
+      "type": "keybind",
+      "name": "Pause / resume",
+      "default": "F2"
+    },
+    "key-step1": {
+      "type": "keybind",
+      "name": "Step one substep",
+      "description": "Held down, it repeats.",
+      "default": "F3"
+    },
+    "key-step10": {
+      "type": "keybind",
+      "name": "Step ten substeps",
+      "description": "Held down, it repeats.",
+      "default": "F4"
+    },
+    "key-render": {
+      "type": "keybind",
+      "name": "Rendering on / off",
+      "description": "Only during a solve, where the frames go back to the fast loop. A replay you cannot see is not a replay.",
+      "default": "F5"
+    },
+    "key-hitboxes": {
+      "type": "keybind",
+      "name": "Hitboxes: off / on / only",
+      "default": "F6"
+    },
+    "key-replay": {
+      "type": "keybind",
+      "name": "Replay from the start",
+      "default": "F7"
+    },
+    "key-quit": {
+      "type": "keybind",
+      "name": "Quit to the level screen",
+      "default": "F9"
+    },
+    "key-itermap": {
+      "type": "keybind",
+      "name": "The iteration map",
+      "default": "F10"
+    },
+    "key-faster": {
+      "type": "keybind",
+      "name": "Spectating speed up",
+      "default": "Up"
+    },
+    "key-slower": {
+      "type": "keybind",
+      "name": "Spectating speed down",
+      "default": "Down"
+    },
+    "key-seek-back": {
+      "type": "keybind",
+      "name": "Seek back",
+      "description": "A frame step instead while the game is stopped. Refused during a solve.",
+      "default": "Left"
+    },
+    "key-seek-forward": {
+      "type": "keybind",
+      "name": "Seek forward",
+      "description": "A frame step instead while the game is stopped. Refused during a solve.",
+      "default": "Right"
+    },
+    "key-takeover-end": {
+      "type": "keybind",
+      "name": "End the human takeover",
+      "description": "Debugging: ends a takeover session started with cfg takeover= and closes its records.",
+      "default": "F8"
+    },
+    "human-min-click": {
+      "type": "int",
+      "name": "Human style: minimum click length (ticks)",
+      "description": "0 = off. The solver will not change the button within this many ticks of the last change (240 ticks = 1 second), which removes taps no hand could place. 6 is about 25 ms. If a level needs a tighter tap the solver drops this limit and says so in the log. Needs a new solve to take effect.",
+      "default": 0,
+      "min": 0,
+      "max": 60
+    }
+  }
 }
