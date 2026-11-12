@@ -192,6 +192,7 @@ inline double g_speedDodgeMin = 0.0;
 //                        is 14 (config.hpp kGlitchEmbedDefault).
 inline double g_glitchPortal = 0.0;
 inline double g_glitchWave = 0.0;
+inline double g_glitchPortalMode = 0.0;   // --glitchmode <px>: the margin for gamemode portals (0 = --glitchportal's)
 inline double g_glitchEmbed = 0.0;
 //   --wavecentre <px>   the wave-behaviour option (Avoid glitches, third choice; 0 = off): a wave that ends
 //                       a tick within this many px of the band's floor or ceiling, of a solid (the faces it

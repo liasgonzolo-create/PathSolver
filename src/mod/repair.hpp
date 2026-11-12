@@ -906,6 +906,7 @@ constexpr int kFineTriesPerLadder = 4;
 // nothing left: there it costs only the levels that have already failed without it.
 constexpr long long kCapTiers[] = {16000, 40000};
 constexpr double kTierYq = 0.5, kTierVq = 2.5;
+constexpr double kModePortalMargin = 75.0;   // px between the boxes under which passing a gamemode portal is a skip
 inline bool g_sectionHuman = true;   // the settings page's "section-human": the section search keeps the hold rules
 inline int g_humanMinPulse = 0;   // --minpulse for this session (0 = off)
 inline int g_capTier = 0;    // 0 = the base setting
@@ -3084,6 +3085,9 @@ inline std::vector<std::string> baseArgs(const std::string& out,
         if (g_cfg.glitchPortal > 0.0 && sc > 0.0) {
             a.push_back("--glitchportal");
             a.push_back(num(g_cfg.glitchPortal * sc));
+            // Path Solver: gamemode portals take a wider margin (dp --glitchmode), eased with the rest.
+            a.push_back("--glitchmode");
+            a.push_back(num(kModePortalMargin * sc));
         }
         if (g_cfg.glitchWave > 0.0 && sc > 0.0) {
             a.push_back("--glitchwave");
@@ -7196,7 +7200,7 @@ inline void start(GJBaseGameLayer* l) {
     // The settings page's "Human style", read on the game's thread once for the session; a cfg
     // dpminpulse in autorun.cfg has the last word.
     {
-        const bool autoHuman = Mod::get()->getSettingValue<bool>("auto-human");
+        const bool autoHuman = true;   // always (see session.hpp)
         g_sectionHuman = autoHuman || Mod::get()->getSettingValue<bool>("section-human");
         g_humanMinPulse = g_cfg.dpMinPulse > 0 ? g_cfg.dpMinPulse
                           : autoHuman ? 2

@@ -4443,7 +4443,7 @@ class $modify(GJBaseGameLayer) {
         secsolve::g_portalSkipNodes.clear();
         secsolve::g_modePortals.clear();
         secsolve::g_portalMargin =
-            g_cfg.glitchPortal
+            (g_cfg.glitchPortal > 0.0 ? dpsolve::kModePortalMargin : 0.0)
             * (double)dpsolve::kGlitchStageScale[std::clamp(dpsolve::g_glitchStage, 0, dpsolve::kGlitchStages - 1)];
         if (secsolve::g_portalMargin > 0.0 && m_objects)
             for (auto* o : CCArrayExt<GameObject*>(m_objects))

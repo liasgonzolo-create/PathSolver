@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.9",
+	"version": "v2.2.0-alpha.1",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -114,72 +114,6 @@
 			"name": "The replay panel",
 			"description": "Shows GD's own record of the deepest verified attempt in the free corner of the screen, on and off.",
 			"default": "Tab"
-		},
-		"auto-human": {
-			"type": "bool",
-			"name": "Auto: human-style routes (recommended)",
-			"description": "On, the solver sets all the human-style rules itself for every level: no narrow portal skips, no wave spam, a short minimum click, sliding on D-blocks allowed. Where a stretch has no route with them it eases them step by step for that stretch only, then puts them back. The sliders below and the Avoid glitches choice in Solve > Options are ignored while this is on. Turn it off to set them by hand. Needs a new solve.",
-			"default": true
-		},
-		"human-min-click": {
-			"type": "int",
-			"name": "Human style: minimum click length (ticks)",
-			"description": "0 = off. The solver will not change the button within this many ticks of the last change (240 ticks = 1 second), which removes taps no hand could place. 6 is about 25 ms. If a level needs a tighter tap the solver drops this limit and says so in the log. Needs a new solve to take effect.",
-			"default": 0,
-			"min": 0,
-			"max": 60
-		},
-		"portal-margin": {
-			"type": "int",
-			"name": "No portal skips: margin (px)",
-			"description": "Used when Avoid glitches is on (Solve > Options). A route that passes a portal which would change gamemode, size, gravity, speed or dual closer than this without touching it is dropped, so the solver goes through the portal as the level intends. 15 is the standard value; raise it (for example 60 or 120) if you still see a portal skipped. Where no route exists with it, the solver eases it for that stretch and says so. Needs a new solve.",
-			"default": 15,
-			"min": 1,
-			"max": 600
-		},
-		"wave-min-hold": {
-			"type": "int",
-			"name": "Wave: minimum hold (ticks)",
-			"description": "With Avoid glitches on its wave choice: the wave keeps each press or release at least this long (240 ticks = 1 second). 12 is standard. Raise it (18-24) for bigger, slower zigzags; where a corridor is too tight for that the solver eases it for that stretch and says so. Needs a new solve.",
-			"default": 12,
-			"min": 2,
-			"max": 60
-		},
-		"wave-click-cost": {
-			"type": "int",
-			"name": "Wave: prefer fewer clicks (strength)",
-			"description": "How strongly the solver prefers a wave route with fewer button changes. 4 is standard; 12-20 makes it take the longest diagonals a corridor allows. It only ranks routes, it never blocks one.",
-			"default": 4,
-			"min": 0,
-			"max": 60
-		},
-		"wave-centre-pull": {
-			"type": "int",
-			"name": "Wave: stay near the middle (strength)",
-			"description": "How strongly the wave is pulled to the middle of its corridor. 8 is standard. Lower it (2-4) if the wave makes many small zigzags around the middle instead of a few big ones. It only ranks routes.",
-			"default": 8,
-			"min": 0,
-			"max": 40
-		},
-		"wave-slide": {
-			"type": "bool",
-			"name": "Wave: allow sliding on D-blocks",
-			"description": "With Avoid glitches on its wave choice the wave is kept away from blocks. On, a wave resting on a block it can slide along (a D-block) is allowed, so it can slide through a low corridor instead of spamming. Needs a new solve.",
-			"default": true
-		},
-		"wave-clearance": {
-			"type": "int",
-			"name": "Wave: distance kept from blocks (px)",
-			"description": "With Avoid glitches on its wave choice: how far the wave stays from the floor, the ceiling and blocks. 10 is standard. Lower it (4-6) if a low corridor makes the solver give up the wave rules and spam; 0 turns the distance rule off.",
-			"default": 10,
-			"min": 0,
-			"max": 30
-		},
-		"section-human": {
-			"type": "bool",
-			"name": "Hard spots: keep the human click rules",
-			"description": "When the solver hands a hard stretch to its in-game section search, that search also keeps the minimum click length and the wave's minimum hold, so it cannot answer with spam. If a level stops solving at one spot with this on, turn it off and solve again. Needs a new solve.",
-			"default": true
 		}
 	}
 }

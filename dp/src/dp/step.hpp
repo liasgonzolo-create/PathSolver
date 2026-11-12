@@ -15831,9 +15831,16 @@ inline State stepOne(const State& s, int input, const StepCtx& K, bool& dead,
         if (gapY > 0.0) {
             // ...and the glitch-avoid mode's wider margin, under the same closing rule
             // (thread_pool.hpp g_glitchPortal). Named apart, so a run can say which one it was.
-            const bool glitchDodge = g_glitchPortal > g_portalDodgeMin
+            // --glitchmode (Path Solver): a GAMEMODE portal takes a wider margin of its own -- passing above or
+            // below one the level meant to be taken is a skipped section, not a hairline. Size, gravity, dual,
+            // teleport and speed portals keep --glitchportal: levels do ask for those to be dodged.
+            const bool modePortal = !(p->type == 23 || p->type == 24 || p->type == 28 || p->type == 3
+                                      || p->type == 4 || p->type == 17 || p->type == 18);
+            const double glitchPortalHere =
+                (modePortal && g_glitchPortalMode > g_glitchPortal) ? g_glitchPortalMode : g_glitchPortal;
+            const bool glitchDodge = glitchPortalHere > g_portalDodgeMin
                                      && gapY >= g_portalDodgeMin;
-            if (changes && gapY < std::max(g_portalDodgeMin, g_glitchPortal)) {
+            if (changes && gapY < std::max(g_portalDodgeMin, glitchPortalHere)) {
                 // A portal you are still CLOSING ON is not one you dodged.
                 // [2026-09-03] The guard was asked on every tick of the
                 // approach, so the last tick before a crossing -- where the gap

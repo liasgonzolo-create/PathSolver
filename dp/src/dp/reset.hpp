@@ -707,6 +707,7 @@ inline void resetInvocationState() {
     g_portalDodgeMin = 0.1;
     g_speedDodgeMin = 0.0;
     g_glitchPortal = 0.0;
+    g_glitchPortalMode = 0.0;
     g_glitchWave = 0.0;
     g_waveCentre = 0.0;
     g_waveSlideOk = false;

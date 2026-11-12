@@ -1906,6 +1906,7 @@ inline int cliMainOnce(int argc, char** argv) {
     // --glitchportal <px> / --glitchwave <px>: the glitch-avoid mode (thread_pool.hpp)
     for (int i = 2; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--glitchportal")) g_glitchPortal = std::atof(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--glitchmode")) g_glitchPortalMode = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--glitchwave")) g_glitchWave = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--glitchembed")) g_glitchEmbed = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--waveslide")) g_waveSlideOk = true;

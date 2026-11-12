@@ -91,7 +91,7 @@ inline bool uiConfigureSession(int levelId) {
         // glitches with the wave's behaviour, at one moderate profile for every level. The loop then eases
         // those rules in steps only where a stretch has no route with them and puts them back after it
         // (repair.hpp escalate), which is the per-level tuning; the sliders are read only with it off.
-        const bool autoHuman = Mod::get()->getSettingValue<bool>("auto-human");
+        const bool autoHuman = true;   // always: the human-style settings are gone, the loop adjusts by itself
         if (autoHuman) {
             g_cfg.glitchPortal = 15.0;
             g_cfg.glitchWave = kGlitchWaveDefault;
