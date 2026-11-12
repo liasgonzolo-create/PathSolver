@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.3",
+	"version": "v2.1.0-alpha.4",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -154,6 +154,20 @@
 			"default": 8,
 			"min": 0,
 			"max": 40
+		},
+		"wave-slide": {
+			"type": "bool",
+			"name": "Wave: allow sliding on D-blocks",
+			"description": "With Avoid glitches on its wave choice the wave is kept away from blocks. On, a wave resting on a block it can slide along (a D-block) is allowed, so it can slide through a low corridor instead of spamming. Needs a new solve.",
+			"default": true
+		},
+		"wave-clearance": {
+			"type": "int",
+			"name": "Wave: distance kept from blocks (px)",
+			"description": "With Avoid glitches on its wave choice: how far the wave stays from the floor, the ceiling and blocks. 10 is standard. Lower it (4-6) if a low corridor makes the solver give up the wave rules and spam; 0 turns the distance rule off.",
+			"default": 10,
+			"min": 0,
+			"max": 30
 		}
 	}
 }

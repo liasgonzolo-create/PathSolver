@@ -103,7 +103,8 @@ inline bool uiConfigureSession(int levelId) {
             // (defaults are upstream's 12 / 8 / 4), so a wave that still zigzags more than a
             // corridor needs can be asked for longer holds and fewer changes.
             g_cfg.wavePulse = (int)Mod::get()->getSettingValue<int64_t>("wave-min-hold");
-            g_cfg.waveCentre = kWaveCentreDefault;
+            g_cfg.waveCentre = (double)Mod::get()->getSettingValue<int64_t>("wave-clearance");
+            g_waveSlideSetting = Mod::get()->getSettingValue<bool>("wave-slide");
             g_cfg.waveTidy = (double)Mod::get()->getSettingValue<int64_t>("wave-centre-pull");
             g_cfg.waveToggle = (int)Mod::get()->getSettingValue<int64_t>("wave-click-cost");
         }

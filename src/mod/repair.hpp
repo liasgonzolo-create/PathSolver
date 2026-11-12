@@ -3089,6 +3089,7 @@ inline std::vector<std::string> baseArgs(const std::string& out,
         if (g_cfg.waveCentre > 0.0) {
             a.push_back("--wavecentre");
             a.push_back(num(g_cfg.waveCentre));
+            if (g_waveSlideSetting) a.push_back("--waveslide");
         }
     }
     // ...and dp's --ladderovercapstop wherever dphorizongrow acts (a level of dphorizongrowmin ticks or more): it was made for the grown plans of a very long level, and on the official levels it cost

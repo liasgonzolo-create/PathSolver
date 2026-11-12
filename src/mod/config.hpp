@@ -86,6 +86,8 @@ constexpr double kWaveCentreDefault = 10.0;
 constexpr double kWaveTidyDefault = 8.0;
 constexpr int kWaveToggleDefault = 4;
 
+inline bool g_waveSlideSetting = false;   // Path Solver: the settings page's "wave-slide" (dp --waveslide)
+
 struct Config {
     bool enabled = false;
     int levelId = 1;

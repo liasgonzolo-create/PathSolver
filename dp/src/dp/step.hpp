@@ -3862,6 +3862,10 @@ inline State stepOne(const State& s, int input, const StepCtx& K, bool& dead,
             for (const Obj* o : *K.near) {
                 if (dead) break;
                 if (o->type != 0 || o->slope || o->oriented) continue;
+                // --waveslide: seated on this solid's top (the slide seat), as --glitchwave exempts above
+                if (g_waveSlideOk && waveSeat > -1e17 && std::fabs(yEnd - waveSeat) < 1e-3
+                    && yEnd >= o->cy + o->hh)
+                    continue;
                 const double rx = o->hw + kWaveKillHalf + wc, ry = o->hh + kWaveKillHalf + wc;
                 if (std::fabs(yEnd - o->cy) <= ry && std::fabs(x - o->cx) <= rx) {
                     const bool wasIn = std::fabs(yPrev - o->cy) <= ry && std::fabs(xPrev - o->cx) <= rx;

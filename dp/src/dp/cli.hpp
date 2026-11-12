@@ -1908,6 +1908,7 @@ inline int cliMainOnce(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--glitchportal")) g_glitchPortal = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--glitchwave")) g_glitchWave = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--glitchembed")) g_glitchEmbed = std::atof(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--waveslide")) g_waveSlideOk = true;
         if (!std::strcmp(argv[i], "--wavecentre")) g_waveCentre = std::atof(argv[i + 1]);   // the wave-behaviour option
         if (!std::strcmp(argv[i], "--wavetidy")) g_waveTidy = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--wavetoggle")) g_waveToggle = std::atoi(argv[i + 1]);

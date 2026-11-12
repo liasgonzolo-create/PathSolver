@@ -200,6 +200,10 @@ inline double g_glitchEmbed = 0.0;
 //                       for, so a corridor narrower than twice this leaves no wave states (the loop then
 //                       falls back to --glitchwave alone, src/mod/repair.hpp escalate).
 inline double g_waveCentre = 0.0;
+//   --waveslide         (Path Solver) with --wavecentre: a wave SEATED on a solid it slides on (the 1755 slide
+//                       seat, the same test --glitchwave exempts) is not dropped for being near that solid.
+//                       A wave resting on a D-block is how such a corridor is meant to be flown.
+inline bool g_waveSlideOk = false;
 //   --wavetidy <S> / --wavetoggle <T>   a PREFERENCE among wave routes, not a drop (0 = off). The route's own
 //                       State::tight (the goal pick already reads it: lower is roomier) takes, on every wave tick,
 //                       floor(S * off^2) where off is how far the wave sits from the middle of the corridor it is
