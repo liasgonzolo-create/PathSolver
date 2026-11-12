@@ -7195,10 +7195,13 @@ inline void start(GJBaseGameLayer* l) {
     dpbridge::checkSubscribe(g_cfg.dpCheck);
     // The settings page's "Human style", read on the game's thread once for the session; a cfg
     // dpminpulse in autorun.cfg has the last word.
-    g_sectionHuman = Mod::get()->getSettingValue<bool>("section-human");
-    g_humanMinPulse = g_cfg.dpMinPulse > 0
-                          ? g_cfg.dpMinPulse
+    {
+        const bool autoHuman = Mod::get()->getSettingValue<bool>("auto-human");
+        g_sectionHuman = autoHuman || Mod::get()->getSettingValue<bool>("section-human");
+        g_humanMinPulse = g_cfg.dpMinPulse > 0 ? g_cfg.dpMinPulse
+                          : autoHuman ? 2
                           : (int)Mod::get()->getSettingValue<int64_t>("human-min-click");
+    }
     dpbridge::cancelSearch(false);
     // cfg dpplainbeside when it is given (3 is the gamble, which used to be the setting "Solve faster (not reproducible)"
     // and is now cfg only), else the plain default. Read here, once for the session.

@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.8",
+	"version": "v2.1.0-alpha.9",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -114,6 +114,12 @@
 			"name": "The replay panel",
 			"description": "Shows GD's own record of the deepest verified attempt in the free corner of the screen, on and off.",
 			"default": "Tab"
+		},
+		"auto-human": {
+			"type": "bool",
+			"name": "Auto: human-style routes (recommended)",
+			"description": "On, the solver sets all the human-style rules itself for every level: no narrow portal skips, no wave spam, a short minimum click, sliding on D-blocks allowed. Where a stretch has no route with them it eases them step by step for that stretch only, then puts them back. The sliders below and the Avoid glitches choice in Solve > Options are ignored while this is on. Turn it off to set them by hand. Needs a new solve.",
+			"default": true
 		},
 		"human-min-click": {
 			"type": "int",

@@ -87,7 +87,22 @@ inline bool uiConfigureSession(int levelId) {
             g_cfg.coinFiles = true;
         }
         // Avoid glitches: the searches drop the frame-level routes (Config::glitchPortal).
-        if (g_uiGlitch) {
+        // Path Solver: "auto-human" (the settings page, on by default) picks everything below itself: Avoid
+        // glitches with the wave's behaviour, at one moderate profile for every level. The loop then eases
+        // those rules in steps only where a stretch has no route with them and puts them back after it
+        // (repair.hpp escalate), which is the per-level tuning; the sliders are read only with it off.
+        const bool autoHuman = Mod::get()->getSettingValue<bool>("auto-human");
+        if (autoHuman) {
+            g_cfg.glitchPortal = 15.0;
+            g_cfg.glitchWave = kGlitchWaveDefault;
+            g_cfg.glitchEmbed = kGlitchEmbedDefault;
+            g_cfg.glitchDeco = true;
+            g_cfg.wavePulse = 12;
+            g_cfg.waveCentre = 8.0;
+            g_waveSlideSetting = true;
+            g_cfg.waveTidy = 4.0;
+            g_cfg.waveToggle = 10;
+        } else if (g_uiGlitch) {
             // Path Solver: the settings page's "portal-margin" in place of the fixed default, so a
             // user who sees a portal skipped can ask for a wider miss to count as a skip. The
             // loop's staged easing (repair.hpp g_glitchStage) still applies to it.
@@ -98,7 +113,7 @@ inline bool uiConfigureSession(int levelId) {
             g_cfg.glitchDeco = true;
         }
         // ...and, as the menu's third choice, the wave's behaviour on top (Config::wavePulse / waveCentre).
-        if (g_uiGlitchMode >= UI_GLITCH_WAVE) {
+        if (!autoHuman && g_uiGlitchMode >= UI_GLITCH_WAVE) {
             // Path Solver: the hold length and the two preferences come from the settings page
             // (defaults are upstream's 12 / 8 / 4), so a wave that still zigzags more than a
             // corridor needs can be asked for longer holds and fewer changes.
