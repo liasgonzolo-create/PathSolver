@@ -200,6 +200,7 @@ bool Solver::preStep(PlayLayer* pl) {
     }
 
     auto pos = pl->m_player1->getPosition();
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) { bail(pl); return false; }
     if (static_cast<int>(candPath.size()) <= t) candPath.resize(t + 1, Sample{pos.x, pos.y});
     candPath[t] = Sample{pos.x, pos.y};
 
@@ -494,7 +495,19 @@ int Solver::playbackSteps(PlayLayer* pl, float dt) {
     return n;
 }
 
+// The player's position became NaN/infinite. The game crashes on its next
+// tick if that is left alone. This happens when another mod that changes
+// physics stepping (Click Between Frames, TPS/physics bypass) is active.
+void Solver::bail(PlayLayer* pl) {
+    stop(pl);
+    status = "stopped: another physics mod is interfering";
+    Notification::create("Path Solver stopped: turn off Click Between Frames / physics bypass mods", NotificationIcon::Error)->show();
+    pl->resetLevel();
+}
+
 void Solver::playbackPre(PlayLayer* pl) {
+    auto pos = pl->m_player1->getPosition();
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) { bail(pl); return; }
     int t = compat::rawTick(pl) + m_tickOffset;
     curTick = std::max(0, t);
     setHeld(pl, t >= 0 && t < static_cast<int>(plan.size()) && plan[t]);
