@@ -43,6 +43,9 @@ jobs:
         uses: geode-sdk/build-geode-mod@main
         with:
           bindings-ref: f050fd74ad531b0827377c97510cb807903ff1b3
+          # The prebuilt Codegen that the SDK downloads no longer matches the 5.10.1 headers
+          # (generated Geode/mapping/*.hpp are missing), so build it from the SDK checkout.
+          configure-args: -DSKIP_BUILDING_CODEGEN=OFF
 
       - name: Upload the package
         uses: actions/upload-artifact@v7
