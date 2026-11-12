@@ -4439,7 +4439,7 @@ class $modify(GJBaseGameLayer) {
         secsolve::g_holdDropped = 0;
         secsolve::g_minHoldAll = dpsolve::g_sectionHuman ? dpsolve::g_humanMinPulse : 0;
         secsolve::g_minHoldWave =
-            (dpsolve::g_sectionHuman && g_cfg.wavePulse > 1 && !dpsolve::g_waveRelaxed) ? g_cfg.wavePulse : 0;
+            dpsolve::g_sectionHuman ? dpsolve::wavePulseNow() : 0;
         secsolve::g_portalSkipNodes.clear();
         secsolve::g_modePortals.clear();
         secsolve::g_portalMargin =

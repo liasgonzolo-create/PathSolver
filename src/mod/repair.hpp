@@ -1266,6 +1266,20 @@ inline int g_escalations = 0;         // how many times the ladder has been give
 // that needed it only: g_waveRelaxedX is the deepest death at the time, and a death kWaveRelaxSpan px past it
 // (iteration handler) puts the wave behaviour back, so one forced crawl does not end it for the rest of the level.
 inline bool g_waveRelaxed = false;
+// Path Solver: before the wave's behaviour is dropped outright it is eased in two steps, so a corridor too
+// tight for the full hold still gets a hold a hand can do rather than none: stage 1 halves the hold and the
+// clearance, stage 2 asks a quarter of the hold (at least 4 ticks) and no clearance, then g_waveRelaxed.
+inline int g_waveStage = 0;
+inline int wavePulseNow() {
+    if (g_cfg.wavePulse <= 1 || g_waveRelaxed) return 0;
+    return g_waveStage == 0 ? g_cfg.wavePulse
+         : g_waveStage == 1 ? std::max(4, g_cfg.wavePulse / 2)
+                            : std::max(4, g_cfg.wavePulse / 4);
+}
+inline double waveCentreNow() {
+    if (g_cfg.waveCentre <= 0.0 || g_waveRelaxed) return 0.0;
+    return g_waveStage == 0 ? g_cfg.waveCentre : g_waveStage == 1 ? g_cfg.waveCentre * 0.5 : 0.0;
+}
 // ...and the glitch margins (portal / wave / embed) are eased the same way, in steps: a level that only a hairline
 // dodge of a portal or a hazard gets through (a route the game cleared passes such a portal under 2 px) cannot be
 // solved with the margins at their full size, so a wall with no anchor first loses the wave's behaviour, then has
@@ -3083,13 +3097,13 @@ inline std::vector<std::string> baseArgs(const std::string& out,
     if (g_cfg.glitchDeco) a.push_back("--glitchdeco");
     // ...and the wave's behaviour (the menu's third choice), until a search with it found no anchor (escalate).
     if (!g_waveRelaxed) {
-        if (g_cfg.wavePulse > 1) {
+        if (wavePulseNow() > 1) {
             a.push_back("--wavepulse");
-            a.push_back(std::to_string(g_cfg.wavePulse));
+            a.push_back(std::to_string(wavePulseNow()));
         }
-        if (g_cfg.waveCentre > 0.0) {
+        if (waveCentreNow() > 0.0) {
             a.push_back("--wavecentre");
-            a.push_back(num(g_cfg.waveCentre));
+            a.push_back(num(waveCentreNow()));
             if (g_waveSlideSetting) a.push_back("--waveslide");
         }
     }
@@ -7271,6 +7285,7 @@ inline void start(GJBaseGameLayer* l) {
     g_recordRequest = false;
     g_coldRestarted = false;
     g_waveRelaxed = false;
+    g_waveStage = 0;
     g_glitchStage = 0;
     g_waveRelaxedX = -1.f;
     g_escalations = 0;
@@ -8867,10 +8882,11 @@ inline void onDeath(long long dt, float deathX) {
     // ...and Avoid glitches comes back a step per kWaveRelaxSpan px, not all at once: on a level that is nothing but
     // hairline passes the next wall would find the full margins again, and each wall costs rounds. The wave's
     // behaviour returns with the last step.
-    if ((g_waveRelaxed || g_glitchStage > 0) && g_waveRelaxedX >= 0.f && deathX > g_waveRelaxedX + kWaveRelaxSpan) {
+    if ((g_waveRelaxed || g_waveStage > 0 || g_glitchStage > 0) && g_waveRelaxedX >= 0.f && deathX > g_waveRelaxedX + kWaveRelaxSpan) {
         if (g_glitchStage > 0) --g_glitchStage;
         if (g_glitchStage == 0) {
             g_waveRelaxed = false;
+    g_waveStage = 0;
             g_waveRelaxedX = -1.f;
             writeResult("dpsolve:   past that stretch - Avoid glitches is back as chosen");
         } else {
@@ -9822,7 +9838,14 @@ inline bool escalate() {
     if (glitchSoftenable()) {
         const bool waveStep = (g_cfg.wavePulse > 1 || g_cfg.waveCentre > 0.0) && !g_waveRelaxed;
         const char* what;
-        if (waveStep) {
+        if (waveStep && g_waveStage < 2) {
+            ++g_waveStage;
+            what = g_waveStage == 1 ? "the wave's minimum hold and clearance are halved for this stretch"
+                                    : "the wave's minimum hold is a quarter (4 ticks at least), no clearance, for this stretch";
+            notify::show(g_waveStage == 1 ? "Path Solver: no route with the full wave hold - halving it here"
+                                          : "Path Solver: still no route - shortest wave hold here",
+                         NotificationIcon::Warning, 6.f);
+        } else if (waveStep) {
             g_waveRelaxed = true;
             what = "the wave behaviour (button floor, terrain clearance) is dropped for this stretch; "
                    "Avoid glitches' margins stay";
