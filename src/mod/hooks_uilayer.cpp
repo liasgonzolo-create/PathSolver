@@ -4,6 +4,7 @@
 #include <Geode/modify/UILayer.hpp>
 
 class $modify(UILayer) {
+    GDSOLVER_HOOK_GUARD()
     // X while a person plays a takeover: the takeover's newest strict checkpoint goes, never the
     // start point's (takeover::removeByKey).
     //

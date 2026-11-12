@@ -99,7 +99,14 @@ inline void stopAndReport(const char* why) {
     const size_t n = g_n.load();
     std::map<std::string, long long> byMod;
     std::map<unsigned long long, std::pair<std::string, unsigned long long>> cache;
-    FILE* f = std::fopen((std::string(DATA_DIR) + "/prof_samples.tsv").c_str(), "w");
+    // One file per session of the process, and per process (a solve that clears is followed by the solution's own
+    // replay in a second process of the same worker, and the second used to overwrite the first):
+    // prof_samples_<pid>.tsv, prof_samples_<pid>_1.tsv, ...
+    static int s_reports = 0;
+    const std::string tsv = std::string(DATA_DIR) + "/prof_samples_" + std::to_string(GetCurrentProcessId())
+        + (s_reports ? "_" + std::to_string(s_reports) : std::string()) + ".tsv";
+    ++s_reports;
+    FILE* f = std::fopen(tsv.c_str(), "w");
     if (f) std::fprintf(f, "ip\tmodule\tbase\ttick\n");
     for (size_t i = 0; i < n; ++i) {
         const auto& s = g_buf[i];
@@ -139,6 +146,7 @@ inline void frame(bool active) {
 }
 #else
 inline void frame(bool) {}
+inline void stopAndReport(const char*) {}
 #endif
 
 }  // namespace p1::profsample

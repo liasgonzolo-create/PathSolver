@@ -160,6 +160,36 @@ static_assert(kEditLevelExiting == offsetof(EditLevelLayer, m_exiting));
 static_assert(kLevelRequiredCoins == offsetof(GJGameLevel, m_requiredCoins));
 
 #undef STATE
+// Sizes. A class the mod allocates through an inline create() is allocated at sizeof(), and the game's constructor then writes every byte the game has.
+#if GEODE_COMP_GD_VERSION >= 22090 && defined(GEODE_IS_WINDOWS)
+// 2.209's GJGameLevel is 0x840 bytes. Bindings that stop short of it make the first level the mod creates itself (the slice's copy) overflow the heap.
+static_assert(sizeof(GJGameLevel) == 0x840, "the bindings' GJGameLevel must be the game's 0x840 bytes: GJGameLevel::create() allocates it inline");
+// The bases the mod derives from (a derived class puts its own members at sizeof(base), and the base's constructor, in the game's or cocos' code, writes
+// the real size) and the classes it creates itself. Each is the size the class's own create() allocates in 2.209 (libcocos2d.dll for cocos2d, the exe for
+// the rest); CCObject's is the highest field its constructor writes.
+static_assert(sizeof(cocos2d::CCObject) == 0x38);
+static_assert(sizeof(cocos2d::CCNode) == 0x140);
+static_assert(sizeof(cocos2d::CCNodeRGBA) == 0x158);
+static_assert(sizeof(cocos2d::CCLayer) == 0x198);
+static_assert(sizeof(cocos2d::CCLayerColor) == 0x220);
+static_assert(sizeof(cocos2d::CCMenuItem) == 0x178);
+static_assert(sizeof(FLAlertLayer) == 0x298);
+static_assert(sizeof(CCMenuItemSpriteExtra) == 0x208);
+static_assert(sizeof(ButtonSprite) == 0x2c8);
+static_assert(sizeof(GJGameState) == 0x6d0);
+// A struct the mod allocates and the game fills (psnap's EMSnap::full): GJEffectManager::saveToState reaches +0x338 (4 bytes) in 2.209, nothing there in 2.2081.
+static_assert(sizeof(EffectManagerState) == 0x340);
+// The element psnap keeps a vector of and assigns to and from the game's own vector (updatePulseEffects divides by 72 in both versions).
+static_assert(sizeof(PulseEffectAction) == 72);
+// The objects psnap and cpflight copy as raw bytes: the size the game frees (the scalar-deleting destructor in slot 1 of its vtable) is the size the copy must cover.
+static_assert(sizeof(PlayerObject) == 0xc50);
+static_assert(sizeof(GameObject) == 0x550);
+static_assert(sizeof(EffectGameObject) == 0x740);
+static_assert(sizeof(GJBaseGameLayer) == GD209(0x3978, 0x3938));   // the update took 0x40 bytes out at m_effectManager
+static_assert(sizeof(PlayLayer) == GD209(0x3d20, 0x3ce0));
+static_assert(sizeof(GJEffectManager) == 0x828);
+#endif
+
 }  // namespace
 
 #if defined(__clang__)

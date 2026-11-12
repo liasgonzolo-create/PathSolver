@@ -60,7 +60,7 @@ def create_worker(worker_id: int, from_worker_id: int = 96,
     # seeded before the base existed still names the Steam install there.
     worker_manifest(from_worker_id, workers_root)   # fails early without one
     base_game = GD_BASE / "game"
-    check_worker(src, src / f"GeometryDash-worker-{from_worker_id}.exe")
+    check_worker(src, src / f"GeometryDash-worker-{from_worker_id}.exe", base=GD_BASE)
     dst.mkdir(parents=True)
     # Resources is a junction. Following it through would copy 1.5GB, so exclude it
     # and re-create a junction to the same target instead.

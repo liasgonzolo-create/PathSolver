@@ -109,7 +109,15 @@ inline bool heapOk(int* heapsOut = nullptr, long long* blocksOut = nullptr) {
 
 // Where the section search was when something ended the process (set by hooks_gamelayer's search:
 // the step of an expansion it was in, the layer and the node). 0 = not in a search.
-inline volatile int g_secPhase = 0, g_secPhaseDepth = -1, g_secPhaseNode = -1;
+inline volatile int g_secPhaseDepth = -1, g_secPhaseNode = -1;
+// The step is a class so that, in a test-instrument build with cfg `heapphase_testonly=<n>`, every change of step validates the heaps first (see
+// heapPhaseCheck below): a heap corruption surfaces at a later free, and the step where the check first fails brackets the write that did it.
+struct SecPhase {
+    volatile int v = 0;
+    operator int() const { return v; }
+    inline SecPhase& operator=(int n);
+};
+inline SecPhase g_secPhase;
 // ...and what each step is (the numbers the search writes into g_secPhase).
 inline const char* secPhaseName(int p) {
     switch (p) {
@@ -137,8 +145,70 @@ inline const char* secPhaseName(int p) {
     case 55: return "layer-end";
     case 60: return "verify";
     case 70: return "census";
+    case 80: return "release-snaps";
+    case 81: return "release-effects";
+    case 82: return "release-state";
+    case 83: return "release-touch";
+    case 84: return "release-world";
+    case 85: return "release-activation";
+    case 86: return "release-done";
     default: return "?";
     }
+}
+
+// cfg `heapphase_testonly=<n>` (n >= 1; test-instrument builds): validate every heap before the section search changes step, at most once every n-1 ms
+// (1 = every change). The first failure is written once, with the step it was found going into and the one before. Slow on a large heap: the search
+// runs several times slower, which a search with a clock in it can notice.
+inline void heapPhaseCheck(int from, int to) {
+#ifdef GEODE_IS_WINDOWS
+    static bool failed = false;
+    static ULONGLONG last = 0;
+    static long long clean = 0;
+    if (failed) return;
+    const ULONGLONG now = GetTickCount64();
+    if (now - last < (ULONGLONG)(g_heapPhaseTestOnly - 1)) return;
+    HANDLE heaps[64];
+    DWORD n = GetProcessHeaps(64, heaps);
+    if (n > 64) n = 64;
+    for (DWORD i = 0; i < n; ++i) {
+        if (!HeapValidate(heaps[i], 0, nullptr)) {
+            failed = true;
+            char line[420];
+            snprintf(line, sizeof(line),
+                     "HEAPCHECK: heap %u of %u is corrupt on the way from step %d (%s) to step %d (%s), layer %d node %d, after %lld clean checks",
+                     (unsigned)i, (unsigned)n, from, secPhaseName(from), to, secPhaseName(to), (int)g_secPhaseDepth, (int)g_secPhaseNode, clean);
+            emit(line);
+            return;
+        }
+    }
+    ++clean;
+    last = GetTickCount64();
+#else
+    (void)from; (void)to;
+#endif
+}
+// cfg `phasefile_testonly=1` (test-instrument builds): the step the search is in, written over the same line of <data>/secphase.txt at every change, so a
+// process the heap kills (0xC0000374 runs no handler) still says where it was.
+inline void phaseFileWrite(int from, int to) {
+    static FILE* f = nullptr;
+    if (!f) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/secphase.txt", DATA_DIR);
+        f = fopen(path, "wb");
+        if (!f) return;
+        setvbuf(f, nullptr, _IONBF, 0);
+    }
+    char line[96];
+    const int n = snprintf(line, sizeof(line), "layer %d node %d step %d (%s) <- %d (%s)                    ", (int)g_secPhaseDepth, (int)g_secPhaseNode, to,
+                           secPhaseName(to), from, secPhaseName(from));
+    fseek(f, 0, SEEK_SET);
+    fwrite(line, 1, (size_t)(n < 90 ? 90 : n), f);
+}
+inline SecPhase& SecPhase::operator=(int n) {
+    if (g_heapPhaseTestOnly > 0) heapPhaseCheck(v, n);
+    if (g_phaseFileTestOnly) phaseFileWrite(v, n);
+    v = n;
+    return *this;
 }
 
 inline void writeRaw(const char* what) {
@@ -146,7 +216,7 @@ inline void writeRaw(const char* what) {
     hookdepth::format(depths, sizeof(depths));
     char line[1024];
     snprintf(line, sizeof(line), "FATAL: %s (privateMB=%d)%s secphase=%d d=%d node=%d", what, privateMB(),
-             depths, g_secPhase, g_secPhaseDepth, g_secPhaseNode);
+             depths, (int)g_secPhase, (int)g_secPhaseDepth, (int)g_secPhaseNode);
     emit(line);
 }
 
@@ -260,7 +330,7 @@ inline LONG WINAPI onFirstChance(EXCEPTION_POINTERS* ep) {
         && InterlockedIncrement(&g_secThrows) <= 3) {
         char line[160];
         snprintf(line, sizeof(line), "secthrow: a C++ exception thrown in a section search at depth %d, step %d, node %d",
-                 g_secPhaseDepth, g_secPhase, g_secPhaseNode);
+                 (int)g_secPhaseDepth, (int)g_secPhase, (int)g_secPhaseNode);
         emit(line);
         writeBacktrace("secthrow:");
     }

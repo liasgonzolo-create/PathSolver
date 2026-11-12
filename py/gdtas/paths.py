@@ -1,12 +1,13 @@
 """Paths to the repository, the build outputs and the machine-local trees.
 
 Everything here is derived from the location of this file, so a clone works
-without editing. Five environment variables override the machine-local parts:
+without editing. Six environment variables override the machine-local parts:
 
     GDSOLVER_LAB       private tree: official-level dumps, gdref, fixups_log
                        archives, development notes            (default <repo>/../GD-lab)
     GDSOLVER_WORKERS   root of the isolated GD instances      (default <repo>/../GD-workers)
     GDSOLVER_GD_BASE   the frozen game build the workers run  (default <workers>/base-<gd.win>)
+    GDSOLVER_GD_BUILD  its name, when mod.json's gd.win has more than one build (default gd.win)
     GDSOLVER_LEVELDP   the solver executable to drive         (default <repo>/build/dp/...)
     GD_DIR             the Geometry Dash installation         (used by py/dev.py)
 """
@@ -59,7 +60,9 @@ MOD_ID = _MOD_JSON["id"]
 BUILD_MOD = REPO / "build" / f"{MOD_ID}.geode"
 # The build of the game the mod targets, and so the one every measurement here
 # was taken on. The bindings and Geode's own load check follow it.
-GD_VERSION = _MOD_JSON["gd"]["win"]
+# GDSOLVER_GD_BUILD names the frozen build when one gd.win covers two executables (2.209 and its hotfix, say): the manifest of the base and every worker's files are then
+# checked against that name, and the mod built for it says which it was built for (GEODE_COMP_GD_VERSION).
+GD_VERSION = os.environ.get("GDSOLVER_GD_BUILD") or _MOD_JSON["gd"]["win"]
 GEODE_VERSION = _MOD_JSON["geode"]
 # Where a measurement session snapshots the .geode it is using, so that a
 # rebuild of the mainline does not swap the binary under a running measurement.
@@ -71,10 +74,29 @@ WORKERS_ROOT = _machine_local("GD-workers", "GDSOLVER_WORKERS")
 # mod.json naming a new build finds nothing until that build is frozen too.
 GD_BASE = Path(os.environ.get("GDSOLVER_GD_BASE")
                or WORKERS_ROOT / f"base-{GD_VERSION}")
-# The range the mainline batch (cold_regress and friends) claims as its pool.
-# Two GD processes sharing one data root mix their result.txt, so the resident
-# side (the MCP server) has to use ids outside this range.
-MAIN_POOL = tuple(range(90, 98))
+# The workers that run the build the mod targets: the game's current executable
+# (GD 2.209's hotfix build, frozen as base-2.209b). A tool that picks a worker for
+# itself starts from these and from nothing else -- a worker of another build (an
+# older executable, another GD version) refuses the package or loads it with its
+# hooks off.
+#   DEFAULT_POOL    what a batch spreads its levels over (cold_regress and friends);
+#                   a one-session run uses the first.
+#   DEFAULT_WORKER  a tool that needs one worker takes the first of the pool, which is
+#                   also the one a batch reaches first: name another whenever a batch
+#                   may be running.
+#   MCP_WORKER      the resident MCP session and the probes that share its policy
+#                   (gdprobe, regen_groups): the second, so they sit beside a batch
+#                   on DEFAULT_WORKER rather than under it.
+#   PERSON_WORKER   the tools a person sits at (watch, play, screenshot): the last,
+#                   which a batch reaches last.
+# Two GD processes sharing one data root mix their result.txt, so a launch is refused
+# while a GD already runs under the worker (gdtas.worker._wait_free): name a free one
+# with --pool / --worker / --worker-id when a batch is running.
+DEFAULT_POOL = (99, 100, 101)
+DEFAULT_WORKER = DEFAULT_POOL[0]
+MCP_WORKER = DEFAULT_POOL[1]
+PERSON_WORKER = DEFAULT_POOL[-1]
+# The MCP server refuses ids below this one.
 MCP_MIN_WORKER_ID = 98
 
 # The reachability-DP solver. Built from dp/ in this repository; the historical

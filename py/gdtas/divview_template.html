@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { --bg:#121216; --panel:#1a1a20; --line:#2c2c36; --text:#d4d4de; --dim:#8c8c9c; --warn:#ff6b5b; --ok:#6fcf7a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font:13px/1.4 Consolas, Menlo, "DejaVu Sans Mono", monospace; overflow:hidden; }
+  #app { display:grid; grid-template-columns:1fr 340px; grid-template-rows:auto 1fr 230px; height:100vh; }
+  header { grid-column:1 / 3; padding:6px 12px; border-bottom:1px solid var(--line); background:var(--panel);
+    display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center; }
+  header h1 { font-size:14px; margin:0; font-weight:600; }
+  #badges { display:flex; flex-wrap:wrap; gap:4px 8px; }
+  .badge { padding:1px 8px; border-radius:10px; border:1px solid var(--line); cursor:pointer; }
+  .badge.part { border-color:var(--warn); color:var(--warn); }
+  .badge.agree { border-color:var(--ok); color:var(--ok); cursor:default; }
+  .dim { color:var(--dim); }
+  #worldwrap, #timewrap { position:relative; min-width:0; min-height:0; }
+  canvas { display:block; width:100%; height:100%; }
+  #world { cursor:grab; }
+  #side { grid-row:2 / 4; grid-column:2; border-left:1px solid var(--line); background:var(--panel); overflow:auto; padding:8px 10px; }
+  #timewrap { border-top:1px solid var(--line); }
+  table { border-collapse:collapse; width:100%; margin:6px 0; }
+  td, th { padding:1px 4px; text-align:right; white-space:nowrap; }
+  th { color:var(--dim); font-weight:400; }
+  td:first-child, th:first-child { text-align:left; }
+  .sw { display:inline-block; width:10px; height:10px; margin-right:5px; vertical-align:middle; border:1px solid #0008; }
+  button, select, input { font:inherit; color:var(--text); background:#24242c; border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
+  button { cursor:pointer; } button:hover { background:#2e2e38; }
+  input[type=number] { width:70px; }
+  h2 { font-size:12px; color:var(--dim); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+  .controls { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px; }
+  .big { font-size:22px; font-weight:600; }
+  #hover { min-height:3.2em; color:var(--dim); }
+  details summary { cursor:pointer; color:var(--dim); }
+  .src { word-break:break-all; font-size:11px; color:var(--dim); margin:3px 0; }
+  .legend span { display:inline-block; margin:1px 10px 1px 0; }
+  .bad { color:var(--warn); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 id="title"></h1>
+    <span class="dim" id="dirnote"></span>
+    <span id="badges"></span>
+  </header>
+  <div id="worldwrap"><canvas id="world"></canvas></div>
+  <div id="side">
+    <div class="big">tick <span id="tickno">0</span></div>
+    <div class="dim" id="progress"></div>
+    <div class="controls">
+      <button id="bFirst" title="Home">|&lt;</button>
+      <button id="bBack" title="Left arrow">&lt;</button>
+      <button id="bPlay" title="Space">play</button>
+      <button id="bFwd" title="Right arrow">&gt;</button>
+      <button id="bLast" title="End">&gt;|</button>
+      <select id="speed" title="[ and ]"></select>
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="follow" checked> follow GD</label>
+      <label>tolerance <input type="number" id="tol" step="0.01" min="0"></label>
+      <button id="bDiv" title="D">first part</button>
+    </div>
+    <table id="tbl"></table>
+    <h2>under the cursor</h2>
+    <div id="hover">move over the level</div>
+    <h2>legend</h2>
+    <div class="legend" id="legend"></div>
+    <h2>keys</h2>
+    <div class="dim">space play/pause &nbsp; &larr; &rarr; one tick (shift: ten) &nbsp; home end &nbsp; D first tick where they part
+      &nbsp; F follow &nbsp; wheel zoom &nbsp; drag pan &nbsp; double-click reset &nbsp; [ ] speed</div>
+    <h2>inputs of this picture</h2>
+    <details open><summary>files (size, sha256)</summary><div id="sources"></div></details>
+  </div>
+  <div id="timewrap"><canvas id="time"></canvas></div>
+</div>
+<script id="data" type="application/json">__DATA_JSON__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const M = D.meta, T0 = M.t0, T1 = M.t1, N = T1 - T0 + 1;
+const S = D.series;
+const MODEL_COLORS = ["#4cc9f0", "#f8961e", "#90be6d", "#f72585", "#b5179e", "#ffd166"];
+let mi = 0;
+S.forEach(s => { s.color = s.kind === "gd" ? "#ffffff" : MODEL_COLORS[mi++ % MODEL_COLORS.length]; });
+const GD = S.find(s => s.kind === "gd") || null;
+const MODELS = S.filter(s => s.kind === "model");
+const HALF = (mode, mini) => mode === 4 ? (mini ? 2 : 5) : mode === 6 ? (mini ? 8.1 : 13.5) : (mini ? 9 : 15);
+
+// ---------------------------------------------------------------- level objects
+const PORTALS = new Set([3,4,5,6,14,15,16,17,18,19,23,24,26,27,28,33,41,42]);
+const PADS = {8:"#f2d03b", 9:"#ee82c8", 10:"#3fc9ee", 34:"#e8493f", 44:"#b07cf0"};
+const RINGS = {11:"#f2d03b", 12:"#ee82c8", 13:"#3fc9ee", 29:"#5ad06a", 32:"#101010", 35:"#e8493f", 36:"#bbbbbb", 37:"#c88af0", 38:"#c88af0", 43:"#b07cf0", 46:"#5fe0d0"};
+const SOLID = "#96a0af", HAZARD = "#e14646", PORTAL = "#509af5", MOVER = "#78c882";
+// object row: [id,type,cx,cy,w,h,uid,radius,rot,sy0,sy1,sdir]
+const statics = D.objects.map(r => ({r, p:{cx:r[2], cy:r[3], w:r[4], h:r[5], on:1, rot:r[8]}}));   // a static's pose never changes
+const movers = D.movers.map(m => {
+  const rows = m.rows;
+  return {r: m.base, rows, off0: m.off0, uid: m.base[6]};
+});
+const byUid = new Map();
+statics.forEach(o => byUid.set(o.r[6], o));
+movers.forEach(o => byUid.set(o.uid, o));
+
+// GD turns an object clockwise by `rot` degrees. objrects.txt's w x h is the bound of the turned box (for most objects), so the
+// box's own size is needed to draw it turned: from GD's oriented box when --obb was given (columns 12, 13 of the row), else, for an
+// object loaded unturned, the size itself (swapped for an odd quarter turn), else the bound undone (a = (W|cos| - H|sin|) / cos 2t,
+// which is singular near 45 degrees: there the bound is all there is and the object stays an axis-aligned box).
+const isTurned = rot => { const m = (((rot || 0) % 90) + 90) % 90; return m > 0.01 && m < 89.99; };
+function nominalOf(o) {
+  if (o.nom !== undefined) return o.nom;
+  const r = o.r; let n = null;
+  if (r[12] != null) n = [r[12], r[13]];
+  else if (!isTurned(r[8])) n = Math.abs(Math.round(r[8] / 90)) % 2 ? [r[5], r[4]] : [r[4], r[5]];
+  else {
+    const a = r[8] * Math.PI / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a)), det = c * c - s * s;
+    if (Math.abs(det) > 0.2) n = [(r[4] * c - r[5] * s) / det, (r[5] * c - r[4] * s) / det];
+  }
+  return o.nom = n;
+}
+function rotRect(cx, cy, w, h, deg) {
+  const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), hw = w / 2, hh = h / 2;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([lx, ly]) => [cx + lx * hw * c + ly * hh * s, cy - lx * hw * s + ly * hh * c]);
+}
+function poseAt(m, t) {                       // an object holds its last recorded row until the next
+  const rows = m.rows;
+  let lo = 0, hi = rows.length - 1, k = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (rows[mid][0] <= t) { k = mid; lo = mid + 1; } else hi = mid - 1; }
+  if (k < 0) return {cx:m.r[2], cy:m.r[3], w:m.r[4], h:m.r[5], on:m.off0 ? 0 : 1, rot:m.r[8]};
+  const q = rows[k];
+  return {cx:q[1], cy:q[2], w:q[3], h:q[4], on:q[5], rot:q[6]};
+}
+function poseOf(o, t) { return o.rows ? poseAt(o, t) : o.p; }
+
+// ---------------------------------------------------------------- canvases
+const world = document.getElementById("world"), wg = world.getContext("2d");
+const tcv = document.getElementById("time"), tg = tcv.getContext("2d");
+let W = 0, H = 0, TW = 0, TH = 0, DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  for (const [c, wrap] of [[world, "worldwrap"], [tcv, "timewrap"]]) {
+    const b = document.getElementById(wrap).getBoundingClientRect();
+    c.width = Math.max(10, Math.round(b.width * DPR)); c.height = Math.max(10, Math.round(b.height * DPR));
+  }
+  W = world.width / DPR; H = world.height / DPR; TW = tcv.width / DPR; TH = tcv.height / DPR;
+  tbase.width = tcv.width; tbase.height = tcv.height;
+  timeDirty = true; dirty = true;
+}
+window.addEventListener("resize", resize);
+
+// ---------------------------------------------------------------- state
+let tick = M.start != null ? Math.max(T0, Math.min(T1, M.start)) : T0, playing = false, speed = M.speed || 0.1, follow = true, tol = M.tol;
+let scale = M.scale || 2.4, timeDirty = true;
+let cam = {x:0, y:0}, dirty = true, mouse = null, hoverObj = null, activeModel = 0;
+const SPEEDS = [0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8];
+const speedSel = document.getElementById("speed");
+SPEEDS.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v + "x"; speedSel.appendChild(o); });
+speedSel.value = speed;
+
+const at = (s, k, t) => { const i = Math.round(t) - T0; return i >= 0 && i < N ? s[k][i] : null; };
+function firstPart(model, tolv) {            // same rule as divergence_view.py: y, then vy, mode, the gameplay rotation, and x last
+  if (!GD) return null;
+  for (let i = 0; i < N; i++) {
+    const gy = GD.y[i], my = model.y[i];
+    if (gy == null || my == null) continue;
+    if (Math.abs(my - gy) > tolv) return {t:T0 + i, why:"y"};
+    if (Math.abs(model.vy[i] - GD.vy[i]) > tolv) return {t:T0 + i, why:"vy"};
+    if (model.mode[i] !== GD.mode[i]) return {t:T0 + i, why:"mode"};
+    if ((model.frame[i] || 0) !== (GD.frame[i] || 0)) return {t:T0 + i, why:"frame"};
+    // x is named last: a rotation the model lacks moves x as well, and the rotation is the cause
+    if (GD.x[i] != null && model.x[i] != null && Math.abs(model.x[i] - GD.x[i]) > tolv) return {t:T0 + i, why:"x"};
+  }
+  return null;
+}
+// Gameplay rotation (Rotate Gameplay): the world does not turn, the player's axes do. Per GD's gframe, the world direction the
+// player runs in (f) and the one its vy points along (l), measured on a rotating level's dump: 0 +x/+y, 1 -y/+x, 2 -x/+y, 3 +y/+x.
+const AXES = [{f:[1, 0], l:[0, 1]}, {f:[0, -1], l:[1, 0]}, {f:[-1, 0], l:[0, 1]}, {f:[0, 1], l:[1, 0]}];
+const axesOf = (s, i) => AXES[(s.frame && s.frame[i]) || 0] || AXES[0];
+const FRAME_COLORS = ["#0000", "#7a5af8", "#f8a15a", "#5ac8a0"];
+function lastTick(s) { for (let i = N - 1; i >= 0; i--) if (s.x[i] != null) return T0 + i; return null; }
+
+function setTick(t) { tick = Math.max(T0, Math.min(T1, t)); dirty = true; }
+function jumpFirstPart() {
+  let best = null;
+  MODELS.forEach(m => { const p = firstPart(m, tol); if (p && (best === null || p.t < best)) best = p.t; });
+  if (best !== null) { setTick(best); }
+}
+
+// ---------------------------------------------------------------- world drawing
+const wx = x => (x - cam.x) * scale + W / 2;
+const wy = y => H / 2 - (y - cam.y) * scale;
+
+function objColor(o) {
+  const t = o.r[1];
+  if (t === 0 || t === 25) return SOLID;
+  if (t === 2) return HAZARD;
+  if (PORTALS.has(t)) return PORTAL;
+  if (PADS[t]) return PADS[t];
+  if (RINGS[t]) return RINGS[t];
+  return "#777788";
+}
+function drawObject(g, o, p, hot) {
+  const r = o.r, t = r[1];
+  let col = o.rows ? MOVER : objColor(o);
+  if (o.rows && t === 2) col = HAZARD;
+  const x0 = wx(p.cx - p.w / 2), x1 = wx(p.cx + p.w / 2), yt = wy(p.cy + p.h / 2), yb = wy(p.cy - p.h / 2);
+  if (x1 < 0 || x0 > W || yb < 0 || yt > H) return;
+  g.lineWidth = hot ? 2 : 1;
+  if (!p.on) {                                  // switched off: drawn, but only as an outline
+    g.setLineDash([3, 3]); g.strokeStyle = "#55556a"; g.strokeRect(x0, yt, x1 - x0, yb - yt); g.setLineDash([]);
+    return;
+  }
+  g.fillStyle = col; g.strokeStyle = hot ? "#fff" : col;
+  if (t === 25) {                                // slope: the surface line GD sampled, solid on its side
+    const xl = wx(p.cx - p.w / 2), xr = wx(p.cx + p.w / 2), yl = wy(r[9]), yr = wy(r[10]), d = r[11];
+    g.beginPath();
+    if (d === 0 || d === 2) { g.moveTo(xl, yl); g.lineTo(xr, yr); g.lineTo(xr, yb); g.lineTo(xl, yb); }
+    else if (d === 1 || d === 3) { g.moveTo(xl, yl); g.lineTo(xr, yr); g.lineTo(xr, yt); g.lineTo(xl, yt); }
+    else { g.moveTo(xl, yl); g.lineTo(xr, yr); }
+    g.globalAlpha = .55; g.fill(); g.globalAlpha = 1; g.lineWidth = 2; g.stroke();
+    return;
+  }
+  if (PADS[t]) { g.globalAlpha = .85; g.fillRect(x0, yt, x1 - x0, Math.max(2, yb - yt)); g.globalAlpha = 1; return; }
+  if (RINGS[t] || (t === 2 && r[7] > 0)) {       // rings and saws are round
+    const rad = (r[7] > 0 ? r[7] : p.w / 2) * scale;
+    g.beginPath(); g.arc(wx(p.cx), wy(p.cy), Math.max(2, rad), 0, 6.2832);
+    if (t === 2) { g.globalAlpha = .7; g.fill(); g.globalAlpha = 1; } else { g.lineWidth = 2; g.stroke(); }
+    return;
+  }
+  const nom = (t === 2 || t === 0) && isTurned(p.rot) ? nominalOf(o) : null;
+  if (nom) {                                     // a hazard or block turned by other than a quarter turn: its own box, turned
+    g.beginPath(); rotRect(p.cx, p.cy, nom[0], nom[1], p.rot).forEach((q, k) => k ? g.lineTo(wx(q[0]), wy(q[1])) : g.moveTo(wx(q[0]), wy(q[1])));
+    g.closePath(); g.globalAlpha = t === 0 ? .8 : .9; g.fill(); g.globalAlpha = 1; if (hot) g.stroke(); return;
+  }
+  if (t === 2 || t === 0) { g.globalAlpha = t === 0 ? .8 : .9; g.fillRect(x0, yt, Math.max(1, x1 - x0), Math.max(1, yb - yt)); g.globalAlpha = 1; if (hot) g.strokeRect(x0, yt, x1 - x0, yb - yt); return; }
+  if (PORTALS.has(t)) { g.globalAlpha = .35; g.fillRect(x0, yt, x1 - x0, yb - yt); g.globalAlpha = 1; g.strokeRect(x0, yt, x1 - x0, yb - yt); return; }
+  g.fillRect(wx(p.cx) - 2, wy(p.cy) - 2, 4, 4);
+}
+
+function drawGrid(g) {
+  const step = 30, x0 = Math.floor((cam.x - W / 2 / scale) / step) * step, x1 = cam.x + W / 2 / scale;
+  const y0 = Math.floor((cam.y - H / 2 / scale) / step) * step, y1 = cam.y + H / 2 / scale;
+  g.lineWidth = 1; g.font = "10px Consolas, monospace"; g.fillStyle = "#6a6a7c";
+  if (step * scale < 5) return;
+  for (let x = x0; x <= x1; x += step) { g.strokeStyle = x % 150 === 0 ? "#3a3a46" : "#22222a"; g.beginPath(); g.moveTo(wx(x), 0); g.lineTo(wx(x), H); g.stroke(); if (x % 150 === 0) g.fillText(x, wx(x) + 2, H - 4); }
+  for (let y = y0; y <= y1; y += step) { g.strokeStyle = y % 150 === 0 ? "#3a3a46" : "#22222a"; g.beginPath(); g.moveTo(0, wy(y)); g.lineTo(W, wy(y)); g.stroke(); if (y % 150 === 0) g.fillText(y, 3, wy(y) - 2); }
+}
+
+function drawSeries(g, s, inset) {
+  const i = Math.round(tick) - T0;
+  g.lineWidth = 1.5; g.strokeStyle = s.color;
+  // the whole path faint, the last stretch bright
+  // (the faint stretch is capped: a whole-level run is tens of thousands of points, nearly all off screen)
+  for (const [from, alpha] of [[Math.max(0, i - 4000), .22], [Math.max(0, i - 120), .9]]) {
+    g.globalAlpha = alpha; g.beginPath(); let pen = false;
+    for (let k = from; k <= i && k < N; k++) {
+      if (s.x[k] == null) { pen = false; continue; }
+      const px = wx(s.x[k]), py = wy(s.y[k]);
+      if (!pen) { g.moveTo(px, py); pen = true; } else g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  if (i < 0 || i >= N || s.x[i] == null) return;
+  // GD is the largest box and the models sit inside it, so boxes that coincide are all still visible.
+  // The box is the hitbox the physics reads; the silhouette on it only says which mode that side is in.
+  const half = Math.max(2, HALF(s.mode[i], s.mini[i]) * scale - inset), px = wx(s.x[i]), py = wy(s.y[i]);
+  g.lineWidth = 1; g.strokeStyle = s.color; g.globalAlpha = .7;
+  g.strokeRect(px - half, py - half, half * 2, half * 2);
+  g.globalAlpha = 1;
+  silhouette(g, s, i, px, py, Math.max(half, 7 * scale - inset));
+  // the player's own axes (they turn with the gameplay rotation): the floor is on its -l side, or the +l side when gravity is flipped
+  const ax = axesOf(s, i), floor = s.up[i] ? 1 : -1;
+  g.strokeStyle = s.color;
+  if (s.og[i]) {                                // on the ground: a bar along the hitbox edge that faces the floor
+    const ex = px + ax.l[0] * floor * half, ey = py - ax.l[1] * floor * half, fx = ax.f[0] * half, fy = -ax.f[1] * half;
+    g.lineWidth = 3; g.beginPath(); g.moveTo(ex - fx, ey - fy); g.lineTo(ex + fx, ey + fy); g.stroke();
+  }
+  g.lineWidth = 1.5; g.beginPath(); g.moveTo(px, py);                  // vy, drawn along the axis it is measured on
+  g.lineTo(px + ax.l[0] * s.vy[i] * 2.5 * scale, py - ax.l[1] * s.vy[i] * 2.5 * scale); g.stroke();
+  if (s.dual && s.dual[i] && s.y2[i] != null && !(s.frame && s.frame[i])) {      // (the partner is placed for an unrotated run only)
+    g.setLineDash([4, 3]); g.strokeRect(px - half, wy(s.y2[i]) - half, half * 2, half * 2); g.setLineDash([]);
+  }
+}
+
+// A plain shape per mode, enough to tell them apart (not the game's art). Local axes: +x ahead, +y away from the floor
+// (flipped when gravity is upside down); both turn with the gameplay rotation (the player's axes, AXES); h is the half-size
+// in pixels. ship and wave tilt with the way they move.
+function silhouette(g, s, i, px, py, h) {
+  const mode = s.mode[i], flip = s.up[i] ? -1 : 1, ax = axesOf(s, i);
+  let fwd = 1.6;                                         // how far it runs along its forward axis a tick (from the next / previous row)
+  const along = (a, b) => Math.abs((s.x[b] - s.x[a]) * ax.f[0] + (s.y[b] - s.y[a]) * ax.f[1]);
+  if (i + 1 < N && s.x[i + 1] != null) fwd = along(i, i + 1); else if (i > 0 && s.x[i - 1] != null) fwd = along(i - 1, i);
+  if (!(fwd > 0.05)) fwd = 1.6;
+  const tilt = (mode === 1 || mode === 4) ? Math.atan2((s.vy[i] || 0) * 0.225, fwd) : 0;     // 0.225 = GD's step per unit of vy
+  const c = Math.cos(tilt), sn = Math.sin(tilt);
+  // local (ahead, away from the floor) -> turned by the tilt -> the player's world axes (f, l) -> screen (y down)
+  const P = (lx, ly) => {
+    ly *= flip; const rx = lx * c - ly * sn, ry = lx * sn + ly * c;
+    return [px + (rx * ax.f[0] + ry * ax.l[0]) * h, py - (rx * ax.f[1] + ry * ax.l[1]) * h];
+  };
+  const line = pts => pts.forEach((p, k) => { const q = P(p[0], p[1]); if (k) g.lineTo(q[0], q[1]); else g.moveTo(q[0], q[1]); });
+  const path = pts => { g.beginPath(); line(pts); g.closePath(); };
+  const arcPts = (cx, cy, r, a0, a1) => { const o = []; for (let k = 0; k <= 12; k++) { const a = a0 + (a1 - a0) * k / 12; o.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } return o; };
+  const paint = () => { g.globalAlpha = s.kind === "gd" ? .35 : .25; g.fillStyle = s.color; g.fill(); g.globalAlpha = 1; g.lineWidth = s.kind === "gd" ? 2.5 : 2; g.strokeStyle = s.color; g.stroke(); };
+  switch (mode) {
+    case 1:                                               // ship: a pointed hull with a dome on top
+      path([[-1, -.45], [.55, -.45], [1, 0], [.55, .45], [-1, .45]]); paint();
+      g.beginPath(); line(arcPts(-.05, .45, .45, 0, Math.PI)); g.stroke(); break;
+    case 2: {                                             // ball: a circle with a spoke that turns as it rolls
+      g.beginPath(); g.arc(px, py, h, 0, 6.2832); paint();
+      const a = -(s.x[i] * ax.f[0] + s.y[i] * ax.f[1]) / (h / scale);          // the distance run along the forward axis
+      g.beginPath(); g.moveTo(px, py); g.lineTo(px + Math.cos(a) * h, py - Math.sin(a) * h); g.stroke(); break; }
+    case 3:                                               // ufo: a saucer with a dome
+      path([[-1, -.1], [-.55, -.55], [.55, -.55], [1, -.1], [.55, .1], [-.55, .1]]); paint();
+      g.beginPath(); line(arcPts(0, .1, .5, 0, Math.PI)); g.stroke(); break;
+    case 4:                                               // wave: an arrowhead
+      path([[-1, -.8], [1, 0], [-1, .8], [-.45, 0]]); paint(); break;
+    case 5:                                               // robot: a body with a visor and two feet
+      path([[-.8, -.55], [.8, -.55], [.8, .9], [-.8, .9]]); paint();
+      path([[-.8, -1], [-.25, -1], [-.25, -.55], [-.8, -.55]]); g.fill();
+      path([[.25, -1], [.8, -1], [.8, -.55], [.25, -.55]]); g.fill();
+      path([[.05, .25], [.8, .25], [.8, .6], [.05, .6]]); g.fill(); break;
+    case 6: {                                             // spider: a small body and four legs
+      path([[-.5, -.4], [.5, -.4], [.5, .5], [-.5, .5]]); paint();
+      g.beginPath();
+      for (const [x0, y0, x1, y1] of [[-.5, -.2, -1, -.9], [.5, -.2, 1, -.9], [-.5, .3, -1, -.1], [.5, .3, 1, -.1]]) {
+        const a = P(x0, y0), b = P(x1, y1); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); }
+      g.stroke(); break; }
+    case 7:                                               // swing: a round body with a wing bar across the top
+      g.beginPath(); g.arc(px, py, h * .55, 0, 6.2832); paint();
+      { const a = P(-1, .7), b = P(1, .7); g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineWidth = 3; g.stroke(); }
+      break;
+    default:                                              // cube (0) and anything unknown: a square with a face
+      path([[-.85, -.85], [.85, -.85], [.85, .85], [-.85, .85]]); paint();
+      path([[.15, .1], [.55, .1], [.55, .5], [.15, .5]]); g.fill();
+  }
+}
+
+function draw() {
+  const g = wg; g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.fillStyle = "#121216"; g.fillRect(0, 0, W, H);
+  const gi = Math.round(tick) - T0;
+  if (follow) {
+    const ref = (GD && GD.x[gi] != null) ? GD : (S.find(s => s.x[gi] != null) || null);
+    if (ref) { cam.x = ref.x[gi]; cam.y = ref.y[gi]; }
+  }
+  drawGrid(g);
+  const t = Math.round(tick);
+  for (const o of statics) drawObject(g, o, poseOf(o, t), o === hoverObj);
+  for (const o of movers) drawObject(g, o, poseOf(o, t), o === hoverObj);
+  // the objects each side says it stands on / is clamped to
+  for (const s of S) {
+    const u = at(s, "snap", t);
+    if (u != null && u >= 0 && byUid.has(u)) {
+      const o = byUid.get(u), p = poseOf(o, t);
+      g.setLineDash([5, 3]); g.lineWidth = 2; g.strokeStyle = s.color;
+      const pad = s.kind === "gd" ? 3 : 6;
+      g.strokeRect(wx(p.cx - p.w / 2) - pad, wy(p.cy + p.h / 2) - pad, p.w * scale + pad * 2, p.h * scale + pad * 2);
+      g.setLineDash([]);
+    }
+  }
+  MODELS.forEach((m, k) => drawSeries(g, m, 3 * (k + 1)));
+  if (GD) drawSeries(g, GD, 0);
+  // the gap between each model and GD at this tick
+  if (GD && GD.x[gi] != null) for (const m of MODELS) {
+    if (m.x[gi] == null) continue;
+    const dy = Math.abs(m.y[gi] - GD.y[gi]);
+    g.strokeStyle = dy > tol ? "#ff5b4b" : "#5c5c6c"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(wx(GD.x[gi]), wy(GD.y[gi])); g.lineTo(wx(m.x[gi]), wy(m.y[gi])); g.stroke();
+  }
+  g.fillStyle = "#8c8c9c"; g.font = "11px Consolas, monospace";
+  g.fillText("scale " + scale.toFixed(2) + " px/unit   y up   boxes are the hitboxes the physics reads", 8, 14);
+}
+
+// ---------------------------------------------------------------- timeline
+const LOGLO = -3, LOGHI = 3;
+// Everything on the timeline but the cursor is drawn once into an offscreen canvas (a whole-level run is tens
+// of thousands of points) and blitted each frame; only a resize or a new tolerance draws it again.
+const tbase = document.createElement("canvas"), tbg = tbase.getContext("2d");
+function renderTimeBase() {
+  const g = tbg; g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.fillStyle = "#16161c"; g.fillRect(0, 0, TW, TH);
+  const L = 54, R = 10, pw = TW - L - R;
+  const X = t => L + (t - T0) / Math.max(1, N - 1) * pw;
+  const strips = [{y:6, h:TH * 0.36}, {y:TH * 0.36 + 18, h:TH * 0.36}, {y:TH * 0.72 + 30, h:TH * 0.16}];
+  g.font = "10px Consolas, monospace"; g.fillStyle = "#8c8c9c";
+  // axis labels
+  const stepT = Math.pow(10, Math.floor(Math.log10(Math.max(1, N / 8))));
+  const stepN = [1, 2, 5, 10].map(k => k * stepT).find(v => N / v <= 12) || stepT * 10;
+  g.strokeStyle = "#23232c";
+  for (let t = Math.ceil(T0 / stepN) * stepN; t <= T1; t += stepN) {
+    g.beginPath(); g.moveTo(X(t), 4); g.lineTo(X(t), TH - 14); g.stroke(); g.fillText(t, X(t) - 14, TH - 3);
+  }
+  // strip A: y(t)
+  let lo = 1e9, hi = -1e9;
+  for (const s of S) for (let i = 0; i < N; i++) { const v = s.y[i]; if (v != null && v > -1e5 && v < 1e5) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+  if (hi - lo < 1) { lo -= 1; hi += 1; }
+  const A = strips[0], ya = v => A.y + A.h - (v - lo) / (hi - lo) * A.h;
+  g.fillStyle = "#8c8c9c"; g.fillText("y", 6, A.y + 10); g.fillText(hi.toFixed(0), 6, A.y + 22); g.fillText(lo.toFixed(0), 6, A.y + A.h);
+  for (const s of S) {
+    g.strokeStyle = s.color; g.lineWidth = s.kind === "gd" ? 2 : 1.4; g.beginPath(); let pen = false;
+    for (let i = 0; i < N; i++) {
+      const v = s.y[i]; if (v == null || v < -1e5 || v > 1e5) { pen = false; continue; }
+      if (!pen) { g.moveTo(X(T0 + i), ya(v)); pen = true; } else g.lineTo(X(T0 + i), ya(v));
+    }
+    g.stroke();
+  }
+  // strip B: |model - GD| on a log scale, against the tolerance
+  const B = strips[1], yb = v => B.y + B.h - (Math.max(LOGLO, Math.min(LOGHI, v)) - LOGLO) / (LOGHI - LOGLO) * B.h;
+  g.fillStyle = "#8c8c9c"; g.fillText("|dy| solid  |dvy| dashed  |dx| dotted", 6, B.y + 10);
+  g.fillText("1e3", 6, B.y + 22); g.fillText("1e-3", 6, B.y + B.h);
+  g.strokeStyle = "#3a3a46"; for (let e = LOGLO; e <= LOGHI; e++) { g.beginPath(); g.moveTo(L, yb(e)); g.lineTo(L + pw, yb(e)); g.stroke(); }
+  g.strokeStyle = "#ff5b4b"; g.setLineDash([2, 3]); g.beginPath(); g.moveTo(L, yb(Math.log10(Math.max(1e-6, tol)))); g.lineTo(L + pw, yb(Math.log10(Math.max(1e-6, tol)))); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#ff5b4b"; g.fillText("tol " + tol, L + pw - 62, yb(Math.log10(Math.max(1e-6, tol))) - 3);
+  if (GD) for (const m of MODELS) {
+    for (const [key, dash] of [["y", []], ["vy", [5, 3]], ["x", [1, 3]]]) {
+      g.strokeStyle = m.color; g.lineWidth = 1.5; g.setLineDash(dash); g.beginPath(); let pen = false;
+      for (let i = 0; i < N; i++) {
+        if (GD[key][i] == null || m[key][i] == null) { pen = false; continue; }
+        const v = Math.abs(m[key][i] - GD[key][i]), px = X(T0 + i), py = yb(v > 0 ? Math.log10(v) : LOGLO);
+        if (!pen) { g.moveTo(px, py); pen = true; } else g.lineTo(px, py);
+      }
+      g.stroke(); g.setLineDash([]);
+    }
+    const p = firstPart(m, tol);
+    if (p) { g.strokeStyle = m.color; g.setLineDash([2, 2]); g.beginPath(); g.moveTo(X(p.t), 4); g.lineTo(X(p.t), TH - 14); g.stroke(); g.setLineDash([]); }
+    const lt = lastTick(m), gl = lastTick(GD);
+    if (lt !== null && gl !== null && lt < gl) { g.fillStyle = m.color; g.fillText("ends", X(lt) - 10, B.y + B.h + 11); g.fillRect(X(lt) - 1, B.y, 2, B.h); }
+  }
+  // strip C: the button, and above it a thin band wherever the gameplay is rotated (GD's own gframe, else the first model's)
+  const C = strips[2]; g.fillStyle = "#8c8c9c"; g.fillText("button", 6, C.y + 10);
+  const FR = GD || MODELS[0];
+  if (FR && FR.frame.some(v => v)) {
+    for (let i = 0; i < N; ) {
+      const v = FR.frame[i] || 0; let j = i; while (j < N && (FR.frame[j] || 0) === v) j++;
+      if (v) { g.fillStyle = FRAME_COLORS[v]; g.fillRect(X(T0 + i), C.y - 8, Math.max(1, X(T0 + j) - X(T0 + i)), 5); }
+      i = j;
+    }
+    g.fillStyle = "#8c8c9c"; g.fillText("rot", 6, C.y - 3);
+  }
+  let held = new Array(N).fill(null);
+  if (D.plan.length) {
+    let ev = 0, state = 0;                      // a press at T acts on the row of T+1
+    for (let i = 0; i < N; i++) { while (ev < D.plan.length && D.plan[ev][0] + 1 <= T0 + i) state = D.plan[ev++][1]; held[i] = state; }
+  } else if (MODELS.length) held = MODELS[Math.min(activeModel, MODELS.length - 1)].held.slice();
+  g.fillStyle = "#5a7a9a";
+  for (let i = 0; i < N; ) {                    // runs of held ticks, not one rectangle per tick
+    if (!held[i]) { i++; continue; }
+    let j = i; while (j < N && held[j]) j++;
+    g.fillRect(X(T0 + i), C.y + 2, Math.max(1, X(T0 + j) - X(T0 + i)), C.h - 2);
+    i = j;
+  }
+  if (GD && GD.death != null) { g.strokeStyle = "#ffa94d"; g.lineWidth = 2; g.beginPath(); g.moveTo(X(GD.death), 4); g.lineTo(X(GD.death), TH - 14); g.stroke(); g.fillStyle = "#ffa94d"; g.fillText("GD dies", X(GD.death) + 4, 14); }
+  tcv._X = X; tcv._L = L; tcv._pw = pw;
+  timeDirty = false;
+}
+function drawTime() {
+  if (timeDirty) renderTimeBase();
+  const g = tg; g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(tbase, 0, 0); g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.strokeStyle = "#ffffff"; g.lineWidth = 1; g.beginPath(); g.moveTo(tcv._X(tick), 0); g.lineTo(tcv._X(tick), TH - 12); g.stroke();
+}
+
+// ---------------------------------------------------------------- panel
+function f(v, nd = 3) { return v == null ? "-" : v.toFixed(nd); }
+let X_END = 1;                                // the furthest x any worldline reaches (a loop: a spread of 100k+ ticks overflows the call)
+for (const s of S) for (const v of s.x) if (v != null && v > X_END) X_END = v;
+function updatePanel() {
+  const t = Math.round(tick), i = t - T0;
+  document.getElementById("tickno").textContent = t;
+  const ref = GD && GD.x[i] != null ? GD : S.find(s => s.x[i] != null);
+  document.getElementById("progress").textContent = ref ? `x ${ref.x[i].toFixed(0)} of ${X_END.toFixed(0)}  (${(100 * ref.x[i] / X_END).toFixed(1)}%)   ${(t / 240).toFixed(1)} s` : "";
+  let h = "<tr><th></th><th>x</th><th>y</th><th>vy</th><th>mode</th><th>og</th><th>held</th><th>on</th></tr>";
+  for (const s of S) {
+    const sn = s.snap[i];
+    h += `<tr><td><span class="sw" style="background:${s.color}"></span>${s.label}</td><td>${f(s.x[i], 2)}</td><td>${f(s.y[i])}</td><td>${f(s.vy[i])}</td>` +
+         `<td>${s.mode[i] == null ? "-" : M.modes[s.mode[i]] || s.mode[i]}${s.mini[i] ? " mini" : ""}${s.up[i] ? " up" : ""}${s.frame[i] ? " rot" + s.frame[i] : ""}</td><td>${s.og[i] == null ? "-" : s.og[i]}</td>` +
+         `<td>${s.kind === "model" && s.held[i] != null ? s.held[i] : "-"}</td><td>${sn != null && sn >= 0 ? sn : ""}</td></tr>`;
+  }
+  if (GD) for (const m of MODELS) {
+    if (GD.y[i] == null || m.y[i] == null) { h += `<tr><td class="dim">${m.label} - GD</td><td colspan="7" class="dim">not both present at this tick</td></tr>`; continue; }
+    const dx = m.x[i] - GD.x[i], dy = m.y[i] - GD.y[i], dv = m.vy[i] - GD.vy[i];
+    const c = v => Math.abs(v) > tol ? ' class="bad"' : "";
+    h += `<tr><td><span class="sw" style="background:${m.color}"></span>${m.label} &minus; GD</td><td${c(dx)}>${f(dx, 3)}</td><td${c(dy)}>${f(dy, 4)}</td><td${c(dv)}>${f(dv, 4)}</td>` +
+         `<td${m.mode[i] !== GD.mode[i] || (m.frame[i] || 0) !== (GD.frame[i] || 0) ? ' class="bad"' : ""}>${m.mode[i] === GD.mode[i] && (m.frame[i] || 0) === (GD.frame[i] || 0) ? "same" : "differs"}</td><td${m.og[i] !== GD.og[i] ? ' class="bad"' : ""}>${m.og[i] === GD.og[i] ? "same" : "differs"}</td><td></td><td></td></tr>`;
+  }
+  document.getElementById("tbl").innerHTML = h;
+}
+function updateBadges() {
+  const el = document.getElementById("badges"); el.innerHTML = "";
+  if (!GD) { el.textContent = "no GD run given: geometry and model only"; return; }
+  for (const m of MODELS) {
+    const p = firstPart(m, tol), b = document.createElement("span");
+    b.className = "badge " + (p ? "part" : "agree"); b.style.marginRight = "8px";
+    const lt = lastTick(m), gl = lastTick(GD);
+    b.textContent = `${m.label}: ` + (p ? `parts from GD at tick ${p.t} (${p.why})` : "agrees with GD wherever both exist") +
+                    (lt !== null && gl !== null && lt < gl ? `; trace ENDS at ${lt}, GD runs to ${gl}` : "");
+    if (p) b.onclick = () => { setTick(p.t); };
+    el.appendChild(b);
+  }
+  if (GD.death != null) { const b = document.createElement("span"); b.className = "badge"; b.textContent = "GD dies at tick " + GD.death; b.onclick = () => setTick(GD.death); el.appendChild(b); }
+}
+
+// ---------------------------------------------------------------- wiring
+document.getElementById("title").textContent = M.title;
+document.getElementById("dirnote").textContent = `differences are ${M.direction}; same tick only; GD attempt ${M.attempt}; ticks ${T0}..${T1}`;
+document.getElementById("tol").value = tol;
+document.getElementById("sources").innerHTML = D.sources.map(s =>
+  `<div class="src"><b>${s.role}</b> ${s.label}<br>${s.path}<br>${s.bytes.toLocaleString()} bytes &nbsp; sha256 ${s.sha256}</div>`).join("");
+document.getElementById("legend").innerHTML =
+  [[SOLID, "solid"], [HAZARD, "hazard"], [PORTAL, "portal"], [MOVER, "moved by the run's recording"], ["#f2d03b", "pad / ring"], ["#ffffff", "GD"]]
+    .map(([c, n]) => `<span><span class="sw" style="background:${c}"></span>${n}</span>`).join("") +
+  S.filter(s => s.kind === "model").map(s => `<span><span class="sw" style="background:${s.color}"></span>${s.label}</span>`).join("") +
+  `<br><span class="dim">dashed box = the object that side stands on / is clamped to; line = the gap between the two players</span>` +
+  `<br><span class="dim">gameplay rotation: the world stays put and the player's axes turn with GD's gframe (0 runs +x, 1 runs -y, 2 runs -x, ` +
+  `3 runs +y); the silhouette and the vy line turn with them, and a coloured band on the timeline marks the rotated stretches. ` +
+  `A hazard turned by other than a quarter turn is drawn as its box turned.</span>` +
+  (M.notes || []).map(n => `<br><span class="dim">note: ${n}</span>`).join("");
+document.getElementById("bFirst").onclick = () => setTick(T0);
+document.getElementById("bLast").onclick = () => setTick(T1);
+document.getElementById("bBack").onclick = () => setTick(Math.round(tick) - 1);
+document.getElementById("bFwd").onclick = () => setTick(Math.round(tick) + 1);
+document.getElementById("bPlay").onclick = () => togglePlay();
+document.getElementById("bDiv").onclick = () => jumpFirstPart();
+speedSel.onchange = () => { speed = +speedSel.value; };
+document.getElementById("follow").onchange = e => { follow = e.target.checked; dirty = true; };
+document.getElementById("tol").onchange = e => { tol = Math.max(0, +e.target.value || 0); updateBadges(); timeDirty = true; dirty = true; };
+function togglePlay() { if (tick >= T1) tick = T0; playing = !playing; document.getElementById("bPlay").textContent = playing ? "pause" : "play"; }
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type === "number") return;
+  const k = e.key, st = e.shiftKey ? 10 : 1;
+  if (k === " ") { togglePlay(); e.preventDefault(); }
+  else if (k === "ArrowLeft") { setTick(Math.round(tick) - st); e.preventDefault(); }
+  else if (k === "ArrowRight") { setTick(Math.round(tick) + st); e.preventDefault(); }
+  else if (k === "Home") setTick(T0); else if (k === "End") setTick(T1);
+  else if (k === "d" || k === "D") jumpFirstPart();
+  else if (k === "f" || k === "F") { follow = !follow; document.getElementById("follow").checked = follow; dirty = true; }
+  else if (k === "[") { speedSel.selectedIndex = Math.max(0, speedSel.selectedIndex - 1); speed = +speedSel.value; }
+  else if (k === "]") { speedSel.selectedIndex = Math.min(SPEEDS.length - 1, speedSel.selectedIndex + 1); speed = +speedSel.value; }
+});
+let drag = null;
+world.addEventListener("mousedown", e => { drag = {x:e.clientX, y:e.clientY, cx:cam.x, cy:cam.y}; world.style.cursor = "grabbing"; });
+window.addEventListener("mouseup", () => { drag = null; world.style.cursor = "grab"; });
+window.addEventListener("mousemove", e => {
+  if (drag) {
+    const dx = (e.clientX - drag.x) / scale, dy = (e.clientY - drag.y) / scale;
+    if (Math.abs(dx) + Math.abs(dy) > 2 / scale) { follow = false; document.getElementById("follow").checked = false; }
+    if (!follow) { cam.x = drag.cx - dx; cam.y = drag.cy + dy; dirty = true; }
+  }
+  const b = world.getBoundingClientRect();
+  mouse = (e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom) ? {x:e.clientX - b.left, y:e.clientY - b.top} : null;
+  hover();
+});
+world.addEventListener("wheel", e => {
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY * 0.0015);
+  if (!follow && mouse) { const wxm = (mouse.x - W / 2) / scale + cam.x, wym = cam.y - (mouse.y - H / 2) / scale; scale = Math.max(0.15, Math.min(40, scale * f)); cam.x = wxm - (mouse.x - W / 2) / scale; cam.y = wym + (mouse.y - H / 2) / scale; }
+  else scale = Math.max(0.15, Math.min(40, scale * f));
+  dirty = true;
+}, {passive:false});
+world.addEventListener("dblclick", () => { scale = 2.4; follow = true; document.getElementById("follow").checked = true; dirty = true; });
+function hover() {
+  if (!mouse) return;
+  const t = Math.round(tick), x = (mouse.x - W / 2) / scale + cam.x, y = cam.y - (mouse.y - H / 2) / scale;
+  let best = null;
+  search: for (const list of [movers, statics]) for (const o of list) {
+    const p = poseOf(o, t);
+    if (p.on && x >= p.cx - p.w / 2 - 1 && x <= p.cx + p.w / 2 + 1 && y >= p.cy - p.h / 2 - 1 && y <= p.cy + p.h / 2 + 1) { best = o; break search; }
+  }
+  if (best !== hoverObj) { hoverObj = best; dirty = true; }
+  const el = document.getElementById("hover");
+  if (!best) { el.textContent = `x ${x.toFixed(1)}  y ${y.toFixed(1)}`; return; }
+  const r = best.r, p = poseOf(best, t);
+  el.textContent = `x ${x.toFixed(1)}  y ${y.toFixed(1)}\nid ${r[0]}  type ${r[1]}  uid ${r[6]}${best.rows ? "  (recorded mover)" : ""}\ncentre ${p.cx}, ${p.cy}  size ${p.w} x ${p.h}${p.on ? "" : "  OFF"}${r[7] ? "  radius " + r[7] : ""}${r[8] ? "  rot " + r[8] : ""}`;
+  el.style.whiteSpace = "pre";
+}
+let scrub = false;
+function scrubAt(e) { const b = tcv.getBoundingClientRect(), X = e.clientX - b.left; const f = (X - tcv._L) / tcv._pw; setTick(T0 + Math.round(f * (N - 1))); }
+tcv.addEventListener("mousedown", e => { scrub = true; scrubAt(e); });
+window.addEventListener("mousemove", e => { if (scrub) scrubAt(e); });
+window.addEventListener("mouseup", () => { scrub = false; });
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (playing) {
+    tick += dt * 240 * speed;
+    if (tick >= T1) { tick = T1; playing = false; document.getElementById("bPlay").textContent = "play"; }   // stop AT the end
+    dirty = true;
+  }
+  if (dirty) { dirty = false; draw(); drawTime(); updatePanel(); }
+  requestAnimationFrame(frame);
+}
+resize();
+updateBadges();
+speedSel.value = speed;                       // the opening tick, speed and zoom come from the generator (meta.start / speed / scale)
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

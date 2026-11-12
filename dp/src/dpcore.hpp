@@ -70,6 +70,7 @@ struct SolveOutcome {
     // on the plan's own walk. -1 = the walk never ran, which is NOT zero.
     long long resimDead = -1, resimFirst = -1;
     const char* resimWhy = nullptr;   // string literal; dp is linked in here
+    int resimKind = -1;               // its DIE kind (0 physics, 1 rule, 2 prune), -1 = no death
     // ...and the killer at that tick. A cause is a category; this is an object,
     // so a row can be joined to the dump and to another walk's row. uid is the
     // LEVEL's, not this build's ordinal. -1 = the walk found no death.
@@ -126,6 +127,10 @@ struct SolveOutcome {
     // attempts, how many never bound their cap, the plain search's plan hash and the chosen
     // plan's. Empty for a call that was not a ladder.
     std::string ladder;
+    // --dumpstate / --start-state (dp statefile.hpp, progress.hpp has the fields' meaning).
+    long long dumpT = -1;
+    std::string dumpStart;
+    long long startStateT = -1;
 };
 
 // A lineage the search published while still running, to be flown and judged (dp/progress.hpp

@@ -22,7 +22,7 @@ import cold_manifest  # noqa: E402
 
 LOG = """session_start
 dpsolve: start level=7 csv=1 bytes horizon=3000
-cfgeff: level=7 dpsolve=1 dpspentpad=1 coins=0 dparg=- presstrace=0,-1
+cfgeff: level=7 dpsolve=1 dpmodelreanchor=1 coins=0 dparg=- presstrace=0,-1
 cfgdiff: level=7(0) dpsolve=1(0)
 dpdefaults: core=dp_core_built_Sep_27_2026_04:00:00 fnv=00000000deadbeef g_upsideCoyote=1 g_aliveCap=16000
 dpsolve: solver args: --out x --cap 2000
@@ -39,7 +39,7 @@ class Generated(unittest.TestCase):
 class ManifestReadsTheLines(unittest.TestCase):
     def test_effective(self):
         e = cold_manifest.effective(LOG)
-        self.assertEqual(e["cfg"]["dpspentpad"], "1")
+        self.assertEqual(e["cfg"]["dpmodelreanchor"], "1")
         self.assertEqual(e["cfg"]["presstrace"], "0,-1")
         self.assertEqual(e["changed"], {"level": "7", "dpsolve": "1"})
         self.assertEqual(e["dp"]["g_upsideCoyote"], "1")

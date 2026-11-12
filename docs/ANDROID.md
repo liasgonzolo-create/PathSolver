@@ -3,9 +3,10 @@
 Experimental and not supported. The model's physics is Windows GD's; whether Android GD
 behaves the same is not known, so a result reached on Android is Android's alone.
 
-The Android build is published on the releases page as a separate pre-release, with a
-version of its own, not in the Windows release; it is for GD 2.2081 under Geode. Nothing
-the README or the results claim was measured on it.
+v0.6.0 and v0.7.0 have no Android build. The Android game is on 2.209 too, and there is no 2.209 port
+of the bindings for android64 yet. The last Android pre-release is v0.5.0's, for GD 2.2081
+under Geode, and the CI's Android job now runs only when started by hand. Nothing the README
+or the results claim was measured on Android.
 
 ## How it differs from Windows
 
@@ -21,7 +22,7 @@ the README or the results claim was measured on it.
 
 ## Where the code changed
 
-- `src/mod/gd_offsets.hpp`: every raw offset and seed address, as `GDOFF(windows, android64)`.
+- `src/mod/gd_offsets.hpp`: every raw offset and seed address, as `GDOFF(windows 2.2081, windows 2.209, android64)`.
   The Windows values are the ones used before.
 - `src/mod/gd_offsets_check.cpp`: holds each offset against the bindings at compile time.
 - `src/solver/areaenv.hpp`: `areaPos` calls `getRealPosition()` on Android.

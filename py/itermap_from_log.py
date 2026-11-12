@@ -32,7 +32,7 @@ fan of trajectories each round flew.  That is not a gap that can be closed from
 here.  A tail is one point every eight ticks and the log holds one line per
 round, so the trajectory was never written down; only a run that is recording
 as it goes has it.  Re-solve the level to get a map with tails in it.  The
-overlay says `[no tails in this map]` rather than drawing nothing silently,
+overlay says `[no tails]` rather than drawing nothing silently,
 which is how this was first reported as a bug (2026-08-29).
 """
 

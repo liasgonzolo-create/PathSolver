@@ -202,7 +202,9 @@ constexpr double kForceUnitUfo = 0.1305;
 // rebuilds went hunting for that 0.010 in the law, in the divisor and in the
 // rounding before anyone looked at the call sites. Make the mistake impossible
 // rather than remembering not to make it.
-struct ForceUnit { double v; };
+// `c`: PlayerObject::update (0x388d80) adds dt * 0.9 * m_force_y * c to vy in float, c a per-mode literal it loads from rodata: 0.47 for the ship, 0.58 for the
+// UFO, and 0.5875 / 0.725 (= c * 1.25) when the player is not full size. 0 = no such literal (the other modes' pushes ride their gravity, see above).
+struct ForceUnit { double v; float c = 0.f; };
 // --forceunit1x: the unit's gravity is the 1x one whatever the speed. The
 // force's own step is 0.225 x m_force for a cube (the 0.945 note at the force
 // application in step.hpp), and lv22 t=20,958..20,960 (mini cube, speed 1.1,
@@ -213,9 +215,9 @@ inline ForceUnit forceUnitFor(uint8_t mode, float /*dxF*/) {
     const double g = std::fabs(cubePhysFor(1.29825f).g);
     switch (mode) {
         case 0: return {g / kForceGDiv};                  // cube
-        case 1: return {kForceUnitShip};
+        case 1: return {kForceUnitShip, 0.47f};
         case 2: return {g * 0.6 / kForceGDiv};            // ball
-        case 3: return {kForceUnitUfo};
+        case 3: return {kForceUnitUfo, 0.58f};
         case 4: return {0.0};                             // wave: measured zero
         // The scales are spelled out rather than taken from kRobotGScale /
         // kSpiderGScale in constants.hpp: this header is below that one in the
@@ -402,13 +404,49 @@ inline void applyForceIds(const std::string& path) {
 //     14472 ship    1.5  x 0.1058 = 0.15870  -> 0.159   (table 0.159)
 //     17701 ship    1.63 x 0.1058 = 0.17245  -> 0.172   (table 0.172)
 // `t` is the step's tick, -1 for none; a moving 3645 is read at the row before it (--forcelive, forceFieldAt).
+// --tptrigforce: set for the step after a teleport TRIGGER moved the body from a place no force reached
+// (step.hpp, State::tpSkip bit 2). The push PlayerObject::update adds is what the previous tick's
+// collisionCheckObjects summed into +0xb8c/+0xb90 (cleared at the end of update), and a crossing or touch
+// teleport trigger runs after that pass (checkSpawnObjects, after checkCollisions), so the pass saw the old
+// place. The model reads the boxes at the start-of-tick point, which is the target. A custom level t=22,979:
+// a spawned teleport trigger puts a cube at a ship portal inside a 3.241 box; GD's first ship tick reads
+// 7.442 (no push) where the model gave 7.807. Per thread, and only for the length of that step.
+// On by default; --no-tptrigforce is the off arm.
+inline bool g_tpTrigForce = true;
+inline thread_local bool t_forceMute = false;
+// --forceraw (ON since 2026-10-24; --no-forceraw is the off arm): the ship's and the UFO's push is added to the velocity as GD computes it, not rounded to the 0.001 grid on its own first. GD:
+// vy += (float)((float)((float)(dt * 0.9f) * F) * c) with F the box's m_force summed (float) and c = 0.47 (ship) / 0.58 (UFO), x 1.25 when mini; the model then snaps the
+// sum with the gravity (stepVy + push, qVy). Rounding the push alone first moves a sum that lies on half a grid step: a custom level's box (m_force 2) pushes
+// 0.2114999890 in GD (0.225f * 2 * 0.47f in float, just under 0.2115), the model gave q(2 * 0.1058) = 0.212, and the release (+0.103) came out +0.315 a tick where
+// GD's vy goes up by 0.314 (ten ticks of 32,603..32,615, a flipped ship) -- a pixel high 250 ticks later, into a hazard (t=32,849). The same law reads the rigs (calib_forcedrop_ship
+// f1/f2/f5/f10, GD 2.209 at 1x/3x/4x: +0.003 / +0.108 / +0.426 / +0.955 beside -0.103, one unit 0.10575 in all of them, mini f10 +1.200 beside -0.122 = 0.5875 * 0.225 * 10)
+// where the rounded product disagreed with f2 or f10 by one grid step for any single unit.
+// The formula and the literals were read from the 2.2081 executable (PlayerObject::update at 0x388d80, setYVelocity at 0x388d10); the rig measurements and the level that
+// shows the defect are the 2.209 game (the workers of the package), and the same law reproduces them, so 2.209 is taken to carry the same code here.
+inline bool g_forceRaw = true;
 inline double forceBoxAcc(double x, double y, double pHalf, ForceUnit unit, long long t = -1) {
+    if (t_forceMute) return 0.0;
+    if (g_forceRaw && unit.c > 0.f) {
+        const double F = forceBoxSum(x, y, pHalf) + (g_forceCircle ? forceCircleSum(x, y, pHalf, t >= 0 ? t - 1 : -1) : 0.0);
+        return (double)((float)(0.225f * (float)F) * unit.c);
+    }
     return qVy((forceBoxSum(x, y, pHalf)
                 + (g_forceCircle ? forceCircleSum(x, y, pHalf, t >= 0 ? t - 1 : -1) : 0.0)) * unit.v);
 }
 // Is there a push to look up at all: the force boxes, and under --forcecircle the constant 3645s.
 inline bool forcePushOn() { return !g_forceBoxes.empty() || (g_forceCircle && g_forceCircles > 0); }
+inline double forceFieldAccAt(double x, double y, double pHalf);
 inline double forceFieldAcc(double x, double y, double pHalf) {
+    return t_forceMute ? 0.0 : forceFieldAccAt(x, y, pHalf);
+}
+// Does the collision pass at (x, y) leave no push for the next tick -- the boxes, the constant 3645s and the
+// fields, read whether or not the current step is muted.
+inline bool forceFreeAt(double x, double y, double pHalf, long long t) {
+    if (forcePushOn() && forceBoxSum(x, y, pHalf) + (g_forceCircle ? forceCircleSum(x, y, pHalf, t) : 0.0) != 0.0)
+        return false;
+    return g_forceFields.empty() || forceFieldAccAt(x, y, pHalf) == 0.0;
+}
+inline double forceFieldAccAt(double x, double y, double pHalf) {
     double a = 0.0;
     for (const auto& ff : g_forceFields) {
         if (g_forceCircle && ff.constLaw) continue;   // forceBoxAcc pushes it (forceCircleSum)
@@ -422,6 +460,30 @@ inline double forceFieldAcc(double x, double y, double pHalf) {
         a += (double)ff.dir * kFF3645Max * frac;
     }
     return a;
+}
+// --groundforce: a grounded body in a force box or field whose push outpulls gravity leaves the ground on that
+// tick. GD's PlayerObject::update adds the force after updateJump has taken the gravity step (the note at the
+// force in step.hpp's air branch), and nothing in that order asks whether the body stands on something; the
+// collision pass seats it again only if it has not risen. A custom level: a ball lands at y 1,335 in a row of
+// 1.983 boxes and GD reads vy 0.139 on the next tick (0.268 push - 0.129 gravity), onGround 0, y 1,335.031,
+// where the model kept it seated at 0. Returns the player-frame vy of the lift-off, or 0 for none. Not while
+// dashing (the dash has its own branch).
+inline bool g_groundForce = true;
+// --forceboost: ...and a push raises the velocity-limit exemption (State::boost, GD's +0x952): right after it
+// sets the velocity, PlayerObject::update writes +0x952 whenever the force is not 0 (0x389307-0x389310).
+// updateJump clears the byte at its head only for a vy inside (-6.4, 8.0), so a ship or UFO pushed past its
+// terminal keeps climbing. A custom level: a ship in a column of 1.983 boxes reads 8.027, 8.134, 8.241 ... in
+// GD (0.210 push - 0.103 gravity a tick) where the model clamped at 8 and added the push, 8.210 every tick.
+inline bool g_forceBoost = true;
+inline double groundLift(double gAcc, double gTerm, double x, double y, double pHalf, uint8_t mode, double dx,
+                         double gdSign, double tScale, long long t, bool dashing) {
+    if (!g_groundForce || dashing) return 0.0;
+    double f = 0.0;
+    if (forcePushOn()) f += forceBoxAcc(x, y, pHalf, forceUnitFor(mode, (float)dx), t) * gdSign;
+    if (!g_forceFields.empty()) f += forceFieldAcc(x, y, pHalf) * gdSign;
+    if (f <= 0.0) return 0.0;
+    const double v = qVy(std::max(gAcc * tScale, gTerm)) + f * tScale;
+    return v > 0.0 ? v : 0.0;
 }
 // FLIP-ON-HEAD-HIT (object id 2866). Not a collider and not a portal: it is
 // one of GD's "gameplay modifier" objects, picked by id in
@@ -521,7 +583,24 @@ inline double forceFieldAcc(double x, double y, double pHalf) {
 // carries tw=1.0 and restores it.
 struct TimeWarp { double cx, mod; };
 inline std::vector<TimeWarp> g_timeWarps;   // sorted by cx at load
+// --warpcap: a warp above 1 leaves the tick alone. GJBaseGameLayer::applyTimeWarp (0x2361a0) writes the value
+// to the CCScheduler's time scale as well, so more than 1 runs more ticks a second, not longer ones. A custom
+// level ramps its warps 1.1, 1.2, 1.3, 1.4 every 48.6 px (and 1.05 earlier): GD's dx stays 2.4004 a tick (speed
+// 1.6) across all of them, where the model went to 3.3604 = x1.4; the 0.2 of lv22 (and 0.5 .. 0.95 on the same
+// level) slow it as measured. On by default; --no-warpcap is the off arm.
+inline bool g_warpCap = true;
 inline double timeWarpAt(double x) {
+    double m = 1.0;
+    for (const auto& w : g_timeWarps) {
+        if (w.cx > x) break;
+        m = w.mod;
+    }
+    return (g_warpCap && m > 1.0) ? 1.0 : m;
+}
+// The warp in force at x as the SCHEDULER has it, --warpcap not applied: applyTimeWarp (0x2361a0) writes the value to the
+// CCScheduler's time scale whatever its size, and the action manager (the dash art's spin, --balldashsprite) runs on that
+// scaled dt, a warp above 1 included.
+inline double rawTimeWarpAt(double x) {
     double m = 1.0;
     for (const auto& w : g_timeWarps) {
         if (w.cx > x) break;
@@ -529,21 +608,11 @@ inline double timeWarpAt(double x) {
     }
     return m;
 }
-// --warpqueue (default on since 2026-10): a time warp set off by touch or by a spawn (the objrects touch / spawn
-// columns) is not on the crossing queue, so it is left out (level_loader.hpp), as the gravity and
-// teleport triggers and the Static Camera already are. A custom level puts a spawn-triggered warp of
-// 0.1 at x=-45: GD's head runs at full time (x 12.98 at t=11 on every attempt), and the model, which
-// fired it on the crossing, ran the whole level at a tenth of GD's speed (x -1.17 at t=1, +0.13 a
-// tick). What sets such a warp off is not modelled: the model runs at full time where GD warps.
-inline bool g_warpQueue = true;
-// --warprot (default on since 2026-10): the cube's air spin is time too. PlayerObject::updateRotation (0x391020) turns the
-// sprite by (dt / 60) * m_rotateSpeed with the step's dt -- the dt the x step and the gravity step take, which a
-// warp has already scaled -- so inside a warp the spin per tick shrinks by the same factor. GD's rows inside a
-// custom level's warp (tw about 0.34, a cube in the air at speed 1.3): 0.5885 deg a tick, 1.7308 x 0.34, where the
-// model turned the full 1.7308. The turned box is what a rotated object is tested against, so the model met a
-// slightly rotated speed portal two ticks early and ran 0.44 px behind GD for the rest of the level. The cube's
-// air spin only (the ground ease and the ramp slerp take dt the same way, not measured here).
-inline bool g_warpRot = true;
+// --wavewarp: the wave's line under a warp is the warped x's. Its y step was dx (x2 mini) unscaled while x took the
+// warp, so a warped wave climbed and dived at 1 / warp times GD's angle. A custom level's dual wave under a 0.4 warp
+// (x=675): GD's rows step x and y by 0.780 a tick (vy shown -7.8 = 1.3 speed, unwarped), the model's by 0.780 and 1.950.
+// lv22's warps sit outside its wave sections.
+inline bool g_waveWarp = true;
 // --warpfly: the ship and the UFO integrate under the warp too (step.hpp, the flight branch). Their
 // branch took the warped dx but stepped vy and y at full time. A custom level's warp at x=2,130
 // (tw 0.36, an upright ship at speed 0.7): GD's dx drops 1.0464 -> 0.3767 and its vy steps go
@@ -576,7 +645,27 @@ inline bool g_warpSlowOnly = true;   // on since 2026-10-07 (--no-warpslowonly i
 struct TpForce {
     uint8_t fm = 0;
     float f = 0.f, ang = 0.f, rmod = 0.f, rmin = 0.f, rmax = 0.f;
+    int exitUid = 0;   // --tpexitrot: the exit object the direction was read off (0 = none found)
 };
+// --tpexitrot: the direction a teleport's force takes is read off its exit's rotation when the teleport happens
+// (teleportPlayer 0x210105..0x210173: (portal-like exit ? 180 : 90) - getRotation()), and the export reads it at
+// load. An exit a Rotate turns since then points the force elsewhere: tpang - (the exit's turn so far). A custom
+// level: teleport portal uid 12 (static force 15) exits at decorations of group 1, which a Rotate at x 1,545 turns
+// -45 + 2 x 360 degrees over 1.7 s; GD's cube leaves the exit at vy 10.6066 (= 15 sin 45), the model at 0
+// (tpang 360 from the load), and fell where GD climbed. The exit is found by its position (tpex / tpey) among the
+// objects a Rotate turns; its Rotates (g_rotTailParts, not lockrot) give the turn by their fire ticks.
+inline bool g_tpExitRot = true;
+struct TpExitRot { int a; double total, durT, erate; int ease; };
+inline std::unordered_map<int, std::vector<TpExitRot>> g_tpExitRots;   // exit uid -> its Rotates (step.hpp tpExitTurn)
+// --tpexitmove: the target is the exit's real position when the teleport happens (teleportPlayer 0x20ff6a), and the
+// export reads it at load. An exit a Move carries since then is somewhere else: tpex / tpey + the Moves' offset so
+// far. A custom level: teleport portal uid 11494 exits at uid 11496 (groups 51 and 52), which a Move at x 6,465
+// lowers by 150 over 1 s; GD's cube lands at 3,285, the model at the load's 3,435, and left the level from there.
+// The exit is found by its position among the objects an x-crossing Move carries (g_autoTrig's ctl rows).
+// On by default; --no-tpexitmove is the off arm.
+inline bool g_tpExitMove = true;
+struct TpExitMove { int a; float dx, dy; double durT; int ease; double erate; };
+inline std::unordered_map<int, std::vector<TpExitMove>> g_tpExitMoves;   // teleport uid -> its exit's Moves
 // TELEPORT TRIGGER (object id 3022, --teleporttrig). EffectGameObject::triggerObject (0x4a5f30)
 // sends it to GJBaseGameLayer::teleportPlayer (0x20fdb0) with no player, which takes m_player1
 // (layer+0xda0) and moves it to the target group's object -- the objrects tpex/tpey, the same
@@ -593,8 +682,140 @@ struct TpTrig {
     uint8_t ignX, ignY, grav;
     int uid;
     TpForce force{};
+    int backIdx = -1;   // --tpback: its entry in g_tpBackHi when it moves x back (cli.hpp), else -1
 };
+// --tpback: a teleport whose exit lies BEHIND moves x back too -- a teleport portal of the 2902 family, a
+// teleport trigger by its crossing, its touch or its chain. GD's crossing queue does not follow:
+// GJBaseGameLayer::checkSpawnObjects (0x21a8f0) walks each channel's triggers in x order from an index that
+// only moves forward, firing one once the player's x reaches its start x (+0x708). So a trigger already
+// passed does not fire again, and the next one fires once x is past the farthest x reached. The model reads
+// every crossing (the teleport and gravity triggers, the time warps, the camera mode) at crossX: the state's
+// x, or that farthest x while it is behind it (State::tpBack, an index into g_tpBackHi). The farthest x of a
+// jump is its source's: a trigger's cx, a box's or a portal's left edge -- fixed per source, so the table is
+// built at load and the search only reads it. An anchor after such a jump is seeded from the mod's
+// --startxhi (the farthest x of the attempt). One body in frame 0.
+inline bool g_tpBack = true;
+// --tptrigonce (ON since 2026-10-24; --no-tptrigonce is the off arm): every crossing teleport trigger carries the farthest-x entry (--tpback) of its own x, so it fires once.
+// GD's crossing queue (checkSpawnObjects 0x21a8f0) walks a channel from an index that only moves forward: a trigger it has fired is
+// not fired again whatever the player's x does afterwards. The model has no such mark; it reads a crossing as `cx > x_before` and
+// `cx <= x_after`, and a trigger that moves x back by what the tick overshot is only kept from firing again when it has a
+// farthest-x entry, which the loader gave to the triggers whose target lies more than 0.5 px behind. A trigger whose target is its own
+// position has none: the dump writes cx and the target with four decimals, the float x the teleport leaves is a hair below cx
+// (cx 18074.8008, float 18074.80078125), and the trigger fires again on every tick -- y put back to the target, x held, vy running down
+// to -15. Measured on a custom level at x=18,074.8, t=10,141: GD's row 10,141 is the target and 10,142 runs on at +1.95; the model's replay
+// of the same plan held (18074.80078, 330.5) from 10,141 to the end of the run, and every route over the spot was judged on a fall
+// that GD never makes (the deaths of x 18,123-18,185 at vy -15). The entry only takes effect on a firing that leaves x behind its
+// own position (State::tpBack is set when the target is behind the x the tick reached), so a trigger whose target lies ahead is
+// unchanged. Hangs on --tpback.
+inline bool g_tpTrigOnce = true;
+// --tpjumpnext: ...and a teleport that moves x FORWARD (a portal's exit, an orb's, a trigger's by its crossing or
+// its touch) leaves the x crossings it passed to the NEXT tick. Measured on a rig of its own (not shipped:
+// a cube at 1x jumped from about 578 to 720): gravity triggers inside the jump (690) and on its target (720) fire
+// on the tick after the orb's, and the same after a teleport trigger's; a 2900 there turns the frame on that tick
+// too (vy 5.193); an ordinary crossing fires on its own tick. So a tick's crossings end where the jump left from
+// and the next tick's start there (State::tpFromX, step.hpp crossBaseX). A custom level t=1,158: an orb puts a
+// robot on a 2900 at (1605, 570); the search turned a tick early and the replay never did. Gravity and time
+// warps were already right (read by position). One body in frame 0. On by default; --no-tpjumpnext is the off arm.
+inline bool g_tpJumpNext = true;
+// --tptrigoff (cli.hpp, after the load): a crossing teleport trigger that a Toggle may have switched off by the time
+// the player reaches it is left out. A custom level: an Item Compare at x 5 spawns a Toggle-off for the trigger at
+// x 31 (and a Toggle-on for the one at x 11); GD takes the one at 11 to x 2,087 and never the one at 31, which
+// --tpjumpnext would otherwise fire the tick after that jump. On by default; --no-tptrigoff is the off arm.
+inline bool g_tpTrigOff = true;
+inline std::vector<double> g_tpBackHi;
+inline double g_startXhi = std::nan("");   // --startxhi; NaN = not said
+inline double crossXOf(double x, uint8_t back) {
+    return (back && back <= g_tpBackHi.size()) ? std::max(x, g_tpBackHi[back - 1]) : x;
+}
+// the entry a jump back from a source leaves: the farther of the state's and the source's
+inline uint8_t tpBackAfter(uint8_t back, int idx) {
+    if (idx < 0 || idx + 1 > 255) return back;
+    if (back && back <= g_tpBackHi.size() && g_tpBackHi[back - 1] >= g_tpBackHi[(size_t)idx]) return back;
+    return (uint8_t)(idx + 1);
+}
+// ...and the portals' and orbs' entries, by uid (cli.hpp); a trigger or a box carries its own
+inline std::unordered_map<int, int> g_tpBackObj;
+inline int tpBackObjIdx(int uid) {
+    const auto it = g_tpBackObj.find(uid);
+    return it == g_tpBackObj.end() ? -1 : it->second;
+}
+// at load: the entry for a source's farthest x (one per distinct value)
+inline int tpBackIdx(double hi) {
+    for (size_t i = 0; i < g_tpBackHi.size(); ++i)
+        if (g_tpBackHi[i] == hi) return (int)i;
+    if (g_tpBackHi.size() >= 254) return -1;
+    g_tpBackHi.push_back(hi);
+    return (int)g_tpBackHi.size() - 1;
+}
 inline std::vector<TpTrig> g_tpTrigs;   // sorted by cx at load
+// --tptrigspawn: a SPAWNED teleport trigger (spawn=1, not touch) goes on the crossing list at the x where
+// an x-crossing chain fires it (triggers.hpp spawnFiresOf: an x-crossing Spawn 1268 or a Toggle 1049 that
+// turns its group on, through spawn-triggered Spawns and Toggles, with the chain's spawn delays). 16 of the
+// cov126 sample's 127 levels hold one whose chain starts at an x crossing (11 with no delay). A custom level
+// sends the cube to y 1,695 from a Spawn at x 9,369: the model, which left the trigger out, ran on below GD
+// from there to the end; with it the replay of that attempt meets GD again. The loader
+// keeps the candidates (cx = the trigger's own x); cli.hpp resolves them after the load. A target behind
+// the x it fires at stays out, as a crossing trigger's does.
+inline bool g_tpTrigSpawn = true;
+inline std::vector<TpTrig> g_tpSpawned;
+// --tptouch: a teleport trigger set off by TOUCH -- its own box (touch=1), or the box of a touch-triggered Spawn
+// or Toggle-on whose chain spawns it with no delay -- moves the state whose box overlaps it in the collision
+// pass, at the end of that tick as the crossing trigger does (step.hpp). State::tpTouch keeps the last box
+// fired (index + 1), so a target inside its own box does not fire it again. A target behind the box stays out.
+// --gravtouch takes the gravity triggers such a chain spawns the same way. One body in frame 0.
+inline bool g_tpTouch = true;
+struct TpTouchBox {
+    double cx, cy, hw, hh;   // the box the player overlaps (the trigger's, or the chain root's)
+    TpTrig t;                // what it does; t.uid is the teleport trigger
+    int boxUid;              // the box's own uid (the trigger, or the chain's root)
+    bool event = false;      // --eventtrig: fired by an event, never by an overlap (cx is where it listens from)
+};
+inline std::vector<TpTouchBox> g_tpTouchBoxes;   // sorted by cx; the event entries are appended after
+// --eventtrig: an Event trigger (3604) crossed on the queue registers a listener (activateEventTrigger 0x232110);
+// when one of its events happens, gameEventTriggered (0x231ff0) spawns its target group on the spot. The model
+// takes the events a state's own pads and orbs raise -- PadActivated (9) and OrbActivated (8) for any, and the
+// one each kind has (YellowPad 45 .. SpiderPad 49, YellowOrb 34 .. TeleportOrb 44: GJGameEvent) -- on the tick
+// the pad or orb fires (State::usedPad / usedOrb gaining it), once the state's crossing x is past the trigger's.
+// What the group spawns with no delay: a gravity trigger takes State::gravTouch and a teleport trigger the
+// touch teleport's end-of-tick move, each through an entry no overlap fires (gravity uid -1, teleport event).
+// An Event trigger with an extra ID (447 / 525) filters on more than the event and stays out. A custom level: a
+// listener for RedPad (47) at x 29,145 spawns a 0.32 gravity trigger; GD's gravityMod goes 1 -> 0.32 on the
+// tick its cube takes a red pad (vy 20), and the model, without it, rose at the full gravity from there.
+// One body in frame 0.
+inline bool g_eventTrig = true;
+struct EventFire {
+    std::vector<int> events;
+    double listenX;
+    uint8_t grav;   // 1: g_gravTouchBoxes[idx], 0: g_tpTouchBoxes[idx]
+    int idx;
+};
+inline std::vector<EventFire> g_eventFires;
+inline int gdEventOfPad(int id) {
+    switch (id) {
+        case 35: return 45;     // YellowPad
+        case 140: return 46;    // PinkPad
+        case 1332: return 47;   // RedPad
+        case 67: return 48;     // GravityPad
+        case 3005: return 49;   // SpiderPad
+        default: return 0;
+    }
+}
+inline int gdEventOfOrb(int id) {
+    switch (id) {
+        case 36: return 34;     // YellowOrb
+        case 141: return 35;    // PinkOrb
+        case 1333: return 36;   // RedOrb
+        case 84: return 37;     // GravityOrb
+        case 1022: return 38;   // GreenOrb
+        case 1330: return 39;   // DropOrb (black)
+        case 1594: return 40;   // CustomOrb (toggle)
+        case 1704: return 41;   // DashOrb
+        case 1751: return 42;   // GravityDashOrb
+        case 3004: return 43;   // SpiderOrb
+        case 3027: return 44;   // TeleportOrb
+        default: return 0;
+    }
+}
 // GRAVITY TRIGGER (object id 2066, --gravtrig). EffectGameObject::triggerObject (0x4a5f30, case
 // 0x4a6e1c) writes the trigger's m_gravityValue (148, the objrects `gmod`) into the player's
 // m_gravityMod (+0xb84), and PlayerObject::updateJump (0x38b900) multiplies the gravity it
@@ -614,11 +835,59 @@ struct GravTrig {
     int uid;
 };
 inline std::vector<GravTrig> g_gravTrigs;   // sorted by cx at load
+// --gravspawn: a SPAWNED gravity trigger (spawn=1, not touch, not player 2 only) fired by an x-crossing
+// Spawn trigger (1268, no touch, no spawn, delay 0) whose target group holds it takes effect at that Spawn's
+// x, by the crossing rule above. A custom level: an x-crossing 2066 sets 0.57, a Spawn at x 23,355 fires a
+// spawned 2066 at 1.0 in its group, and GD's gravityMod goes 0.57 -> 1 on the tick whose move crosses
+// 23,355 in all three attempts that got there (the model, without it, kept 0.57 and fell at -0.123 where
+// GD fell at -0.216). A Spawn with a delay, a touch or a spawned Spawn is not followed. The loader keeps
+// the candidates; cli.hpp resolves them against triggers.txt / objgroups.txt after the load.
+inline bool g_gravSpawn = true;
+// --gravchain: ...and the Spawn is found by the chain walk --tptrigspawn uses (spawnFiresOf): a spawned
+// Spawn or a Toggle that turns the group on is followed back to its x crossing, and a delay moves the
+// x it takes effect at. Off: only an x-crossing Spawn with delay 0 that targets the trigger's group.
+inline bool g_gravChain = true;
+struct GravSpawned {
+    double mod;
+    int uid;
+    double cx = 0.0;   // the trigger's own x (an ordered Spawn's queue reads it)
+};
+inline std::vector<GravSpawned> g_gravSpawned;
 inline double gravModAt(double x) {
     double m = 1.0;
     for (const auto& g : g_gravTrigs) {
         if (g.cx > x) break;
         m = g.mod;
+    }
+    return m;
+}
+// --gravtouch: a gravity trigger set off by TOUCH (touch=1, not for player 2 only) is fired by the state whose
+// box overlaps the trigger's rect in the collision pass -- plain rect overlap, closed edges, as every touch
+// trigger (triggers.hpp TouchTrig, --ctrltouch) -- and State::gravTouch keeps the last one (index + 1 into
+// g_gravTouchBoxes). Its value is in force from the next tick, the crossing rule's +1, until an x-crossing
+// trigger past the box's left edge takes over (gravModOf). 28 of the cov126 sample's 127 levels hold one. An
+// anchor is seeded from GD's own m_gravityMod there (--startgmod, the mod writes it): where it differs from
+// what the crossing triggers give, an entry at the anchor's x that no box overlap reaches stands for it.
+// One body in frame 0, as --ctrltouch.
+inline bool g_gravTouch = true;
+struct GravTouchBox {
+    double cx, cy, hw, hh, mod;
+    int uid;   // -1: the anchor's seed (--startgmod), never overlapped
+    // --boxmoves: the touch boxes (g_touch indices) whose Toggle switches this trigger's group OFF; the trigger fires nothing once one of them has fired.
+    std::vector<int> offBits;
+};
+inline std::vector<GravTouchBox> g_gravTouchBoxes;   // sorted by cx at load; a seed is appended after
+inline double g_startGmod = std::nan("");   // --startgmod; NaN = not said
+inline double gravModOf(double x, uint8_t touch) {
+    double m = 1.0, last = -1e300;
+    for (const auto& g : g_gravTrigs) {
+        if (g.cx > x) break;
+        m = g.mod;
+        last = g.cx;
+    }
+    if (touch && touch <= g_gravTouchBoxes.size()) {
+        const GravTouchBox& b = g_gravTouchBoxes[touch - 1];
+        if (last < b.cx - b.hw) m = b.mod;
     }
     return m;
 }
@@ -653,6 +922,10 @@ struct FollowY {
     double y0ref;         // the reference object's load-time y: F's start
     int refUid;
     long long tAct = -1;  // the crossing tick, once a walk has seen it (model.hpp prepareGroup)
+    // --followtouch: started by the player touching the trigger's own box (touch=1), per state. `cx` is then where the trigger becomes the
+    // slot's owner (the box's left edge less the player's reach); tcx / tcy / thw / thh are the box.
+    bool touch = false;
+    double tcx = 0.0, tcy = 0.0, thw = 15.0, thh = 15.0;
     // The group's objects the model collides with, recorded or static: (uid, load-time y). The
     // first is the reference.
     std::vector<std::pair<int, double>> objs;
@@ -728,22 +1001,6 @@ struct ZoomTrig { double cx, target, durTicks, rate; int ease; };
 inline std::vector<ZoomTrig> g_zoomTrigs;   // sorted by cx at load
 // t: the tick of the row at x, for --zoomchain (-1 = not known: the reading below)
 inline double camScaleAt(double x, double dx, long long t = -1);     // defined below gdEase
-// --zoomchain (default on since 2026-10): the reading above is wrong twice where one zoom starts before the
-// last has finished, or the speed changes inside one. GD's zoom is a tween in TIME that a new
-// zoom replaces: the new one starts from the value the old had reached, while the reading above
-// keeps advancing the old tween to the current x and eases on from there. And it maps time
-// through the current dx, so a speed portal inside an ease moves the curve. Measured against GD's
-// camscale column over one whole attempt of every kit with x-crossed zooms (22 levels): a tween
-// whose crossing row is tc (the first with x >= cx) reads ease((t - tc + 1) / dur) from the
-// value at its start, an instant one changes on row tc itself, and that is exact (worst 0.000000)
-// over all 8 zooms of one 14,681-tick attempt and all 66 of another; the reading above is out by
-// 0.017 and 0.020 there, and by up to 0.55 elsewhere.
-// The tick of a crossing cannot come from x: speed portals the player passes without touching
-// never fire, so the portals' positions do not give the speed between them. It is taken the way
-// the autonomous triggers take theirs, as a level property: the first tick on which a stepped
-// state has crossed, kept for the invocation. A zoom already behind the first state that sees it
-// (crossed before the anchor) is placed at t - floor((x - cx) / dx), the old reading's count.
-inline bool g_zoomChain = true;
 inline std::unique_ptr<std::atomic<long long>[]> g_zoomCrossT;   // per g_zoomTrigs entry
 inline size_t g_zoomCrossN = 0;
 constexpr long long kZoomCrossUnknown = -(1LL << 62);
@@ -1037,7 +1294,17 @@ struct SlideBox {
     double cx, cy, hw, hh;      // LOAD-TIME position
     int uid = -1;
     std::vector<ModRow> live;   // the recording's rows for this uid (--slidelive)
+    std::vector<uint8_t> liveOn;   // ...and each row's on column (--slideon)
 };
+// --slideon: ...and a box its recorded row has switched off arms nothing. The 1755 is a type-40 object outside the
+// moving geometry's on/off, so a box whose group a touch chain toggles off kept arming the wave in the model. SubZero
+// 4003 t=12,239: slide boxes uid 5632-5634, switched off (with the ramps beside them) by the turned touch Spawn uid
+// 8888 -- the recording has them off from its touch on -- and GD's wave dies on the block there while the model's
+// slid on. The row read is the one BEFORE the tick's own: a custom level's wave crosses the toggle (a plain x-crossing
+// 1049) that switches the two 1755s riding beside it off, and GD seats it on them that same tick (y 1,170.00, vy 0)
+// -- the crossing fires after checkCollisions, and the tick's row already says off. On by default; --no-slideon is
+// the off arm.
+inline bool g_slideOn = true;
 inline std::vector<SlideBox> g_slideBoxes;
 // --slidelive (default off): read a box at its recorded position on this tick, as armBoxAt
 // does for the ceiling arm. A 1755 that rides a moving row was tested where it was built, so a
@@ -1047,44 +1314,11 @@ inline std::vector<SlideBox> g_slideBoxes;
 // recorder answered with four more fixups every round without the plan ever changing.
 // On by default since 2026-10-07; --no-slidelive is the off arm.
 inline bool g_slideLive = true;
-// --slideend (default on since 2026-10): the arm also takes the tick's END position, and serves that same
-// tick. GJBaseGameLayer::checkCollisions (0x2137f0) runs collisionCheckObjects, whose type-40 case
-// sets the counter (+0xb78 = 2 for id 1755, beside 1859's +0xb7c), on the moved body BEFORE the solid
-// pass that pushes the wave out (PlayerObject::collidedWithObject). The model tested the START of the
-// tick, so the first touch armed one tick late. A custom level's wave dives onto a block (uid 9009)
-// whose 1755 (uid 9042) starts 0.906 px inside its end box at t=1,056: GD seats it at 264.05 that
-// tick, and the model a tick later, on every attempt. With the flag the start-of-tick touch counts as
-// the previous tick's (slideT 1, still armed) and the wave branch's end touch as this one's (0).
-inline bool g_slideEnd = true;
-// --waveramp: WHILE THE ARM HOLDS, A WAVE RIDES A PLAIN RAMP the way the ship does. GD's ramp kill
-// spares a dart whose slide counter is set (A = !bVar9 && (!m_isDart || m_stateDartSlide > 0), the
-// gate quoted at the ramp kill in step.hpp), and collidedWithSlopeInternal then runs the flight
-// modes' branch (ship / UFO / dart / swing, +0x9b9 / +0x9ba / +0x9bc / +0x9c4) with the wave's own
-// rect, 10x10. So the model's ride pass takes an armed wave with that half (5): the seat is the line
-// + 5 * sqrt(1 + m^2), clamped to the box's top + 5, and the ride law's refusal of a clamped,
-// unchanged target is what drops it off a ramp's high corner. A ramp that takes the body this tick or
-// took it last tick also vetoes the block it leaves (slopeVetoesSolid's x-filter bypass), which is
-// why the wave falls off a slide block's edge as soon as its centre is over the ramp.
-// Measured on a custom level's wave runs (a fresh replay of a recorded plan, GD's dump and slope
-// trace): the 60 ticks it sits on a 45-degree floor ramp with vy 0 (52 on descending ramps, 8 on
-// ascending ones) are all at perpendicular 5.000 from the line, to 1e-5; the high corner of a
-// descending ramp held it at 185.000 = top + 5 on the contact tick, free (-1.047) on the next,
-// seated (+1.755) on the one after. The model, which never let the wave ride, stayed on the block
-// 4 px longer and flew parallel to the ramp 2.43 px above GD. Full size, upright, unturned frame
-// only: no mini or upside-down sample.
-inline bool g_waveRamp = true;
-// --waveslopewall (default on since 2026-10): a wave on a plain ramp's WALL side is not the ramp's to kill. preSlopeCollision
-// (0x38f2e0) tests the side before the ramp: for slopeDir 2/3/4/6 with the player's centre left of the ramp's box
-// (the others only travelling left, centre right of it) it builds the box's 1-px edge strip (CCRect(minX, minY +
-// i, 1, h - 2i), i = 0 unless +0xb70 is set with the slide flags), hands it to collidedWithObjectInternal as a
-// plain solid when it meets the player's rect, and returns before collidedWithSlopeInternal -- no mode test. The
-// model had that for the ship family only (shipCapK below the ramp kill) and ran the ramp's own outline for a
-// wave there, so a mini wave clipping a moving ramp's top-left corner (0.1 x 1.56 px, centre 2.88 px left of the
-// box) died where GD slides on through. Injected on that scene (a plain dir-6 ramp, 21 x 21): with the centre e px
-// left of the box GD kills at e = 1.4 and lets it live at e = 1.6, at any height on the strip and 1.44 px above
-// its top -- the wave's solid kill box, kWaveKillHalf (1.5), against the strip. Plain ramps only (a spiked one's
-// strip is a hazard and is not measured).
-inline bool g_waveSlopeWall = true;
+// --waveflipramp (off): ...and an UPSIDE-DOWN armed wave rides a ceiling ramp from below, by the same law mirrored. The note above had no
+// upside-down sample; a custom level's dual has one: the second wave, flipped, rising at 1.047 a tick beside a 45-degree line, meets the
+// m=2 ceiling ramp uid 166235 (rotated 90) under a 1755 and goes up it at 2.094 a tick (rows 30,767-30,769: 877.17, 879.27, 881.36) where
+// the model, which only lets an upright wave ride, called it inside the ramp and killed it. --no-waveflipramp is the off arm.
+inline bool g_waveFlipRamp = true;   // on by default (release flags, 2026-10-17); --no-waveflipramp is the off arm
 // --ringpresseat (speed.hpp): every toggle ring (1594) in the level, with its recorded rows.
 struct PressRing {
     double cx, cy, hw, hh;      // LOAD-TIME box
@@ -1160,6 +1394,12 @@ inline bool slideBoxTouch(double x, double y, double pHalf, int t = -1) {
                 bx = (double)b.live[lo - 1].cx;
                 by = (double)b.live[lo - 1].cy;
             }
+            // --slideon: the on the box had when this tick's collision pass met it, which is the row BEFORE
+            // this tick's: a crossing toggle fires after checkCollisions, and the recorder writes the tick's
+            // row after both
+            size_t ko = lo;
+            while (ko > 0 && b.live[ko - 1].t >= t) --ko;
+            if (g_slideOn && ko > 0 && ko - 1 < b.liveOn.size() && !b.liveOn[ko - 1]) continue;
         }
         if (std::fabs(x - bx) <= b.hw + pHalf
             && std::fabs(y - by) <= b.hh + pHalf)
@@ -1180,30 +1420,21 @@ inline bool slideBoxTouch(double x, double y, double pHalf, int t = -1) {
 // sits in the ball section where no dash exists; modelled as inert there).
 struct DashStopBox { double cx, cy, hw, hh; };
 inline std::vector<DashStopBox> g_dashStopBoxes;
-// --ctrltouch (default on since 2026-10): an Options trigger (2899) set off by touch is fired by the state that
-// touches it, not read off a recording. Its player-1 controls field (objrects optp1, the trigger's
-// +0x754: 1 disables, -1 enables; processOptionsTrigger 0x223d50 calls disablePlayerControls /
-// enablePlayerControls) is carried as State::ctrlT, and the button is ignored from the next tick
-// while it is set (the window's first-tick rule, --ctrlwinlag). The recorded windows (--ctrlwin)
-// are one attempt's: a window that opens ahead of the anchor where the anchor's x, run on at its
-// own speed, is over such a box is that touch's, and is dropped (cli.hpp); a window the anchor is
-// already inside stays. A custom level puts two at x=4,965 (boxes y 300-330 and 390-420): GD's
-// attempt grazes the lower one at y=345 (its foot on the box top, edges closed) and loses the
-// controls for good; the model, handed that window for every branch, could not find the way
-// past them. The upper box is in a group a Touch trigger (1595, x=4,425, hold mode, toggle "off")
-// switches off while the button is held, and the floor under the lower one puts a standing cube's
-// foot on its top edge: the way is a jump held through. So a box whose group such a Touch trigger
-// (x-crossed, before the box) targets does not fire on a tick whose button is down (CtrlTouchBox::
-// holdOff; cli.hpp marks it). A press held from before the trigger's crossing is taken as down too,
-// which GD, with no fresh press after the crossing, may not do. Single body in frame 0 only.
-inline bool g_ctrlTouch = true;
 struct CtrlTouchBox { double cx, cy, hw, hh; int uid; uint8_t on; uint8_t holdOff = 0; };
 inline std::vector<CtrlTouchBox> g_ctrlTouchBoxes;
+// --stopjump (speed.hpp): the Player Control triggers (1932, Stop Jump on, player 1 targeted or both). The
+// crossing queue's, sorted by x, and the touch-started ones' boxes (State::pcTouch is the last one fired).
+struct PcTrig { double cx; int uid; };
+struct PcTouchBox { double cx, cy, hw, hh; int uid; };
+inline std::vector<PcTrig> g_pcTrigs;
+inline std::vector<PcTouchBox> g_pcTouchBoxes;
+// --reversetrig (speed.hpp): the Reverse triggers (1917) on the crossing queue, sorted by x.
+struct RevTrig { double cx; int uid; };
+inline std::vector<RevTrig> g_revTrigs;
 // Is x over a box a held button switches off, or 30 px short of one? There the button matters in
 // the air: the search expands an airborne cube's pressed child (search_dp.hpp) and keys the button
 // (search_key.hpp keyOf), or the held way through is merged into the released one before it gets there.
 inline bool nearCtrlHoldBox(double x) {
-    if (!g_ctrlTouch) return false;
     for (const CtrlTouchBox& b : g_ctrlTouchBoxes)
         if (b.holdOff && x >= b.cx - b.hw - 30.0 && x <= b.cx + b.hw + 15.0) return true;
     return false;

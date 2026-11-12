@@ -16,9 +16,9 @@ so the model's default (the box decides stage 1) has to let it live:
 
     no flag                  the box decides stage 1  -> survives
 
-(The rect-only stage 1, formerly --hazaabb, and the pair with --no-obb-all were switched
+(The rect-only stage 1, formerly --hazaabb, and the pair with the old --no-obb-all were switched
 off by default and are removed: the rect-only shape kills in a region the game leaves
-alone. --obb-all, the second stage, has been on by default since 2026-09-21.)
+alone. The second stage (formerly --obb-all) has been on since 2026-09-21 and its switch is gone.)
 
 WHICH SHAPE IS THE GAME'S IS NOT WHAT THIS FIXTURE SAYS. The rig
 (data/rigs/calib_hazrot_wave.lvl, swept 2026-09-18 at rot 0/8/15/45, three columns on

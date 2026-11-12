@@ -18,6 +18,13 @@
 // plan the model itself produced, so it is self-contained inside the cold loop
 // (does not conflict with the spec ('solving is always done from scratch')).
 // ============================================================
+#include <charconv>
+#include <chrono>
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <xmmintrin.h>
+#endif
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -25,6 +32,69 @@
 #include <vector>
 
 namespace grouptrace {
+
+// One row of the recording, `<t>,<uid>,<cx>,<cy>,<w>,<h>,<on>,<rot>` (and `,1` for an envelope row), newline
+// last: the bytes snprintf("%lld,%d,%.3f,%.3f,%.3f,%.3f,%d,%.3f\n") writes, put together with std::to_chars,
+// which costs a third (1,474 -> 464 ns a row, measured on 4 M rows; a custom level's bootstrap recording is 21.6 M
+// rows and the flight that wrote them spent 36 s of its 42 in this function). to_chars(float, fixed, 3) writes
+// the same text as "%.3f" of the float taken as a double: checked on 159.5 M floats -- random bit patterns of every
+// exponent, rounding ties and the grid a rect lies on, the non-finite ones too -- with no difference. A row that
+// does not fit goes the way it always went: snprintf, which cuts it at 159 characters.
+inline size_t formatRow(char (&b)[160], long long t, int uid, float cx, float cy, float w, float h, int on,
+                        float rot, bool env) {
+#ifdef _MSC_VER
+    // (Windows only: the Android toolchain's library may not have the floating-point to_chars, and its rows
+    // stay snprintf's.)
+    {
+        char* p = b;
+        char* const last = b + sizeof(b) - 1;   // snprintf keeps the last place for the NUL
+        bool ok = true;
+        auto num = [&](auto v) {
+            const auto r = std::to_chars(p, last, v);
+            if (r.ec == std::errc()) p = r.ptr; else ok = false;
+        };
+        auto fix = [&](float v) {
+            const auto r = std::to_chars(p, last, v, std::chars_format::fixed, 3);
+            if (r.ec == std::errc()) p = r.ptr; else ok = false;
+        };
+        auto put = [&](char c) {
+            if (p < last) *p++ = c; else ok = false;
+        };
+        num(t); put(',');
+        num(uid); put(',');
+        fix(cx); put(',');
+        fix(cy); put(',');
+        fix(w); put(',');
+        fix(h); put(',');
+        num(on); put(',');
+        fix(rot);
+        if (env) { put(','); put('1'); }
+        put('\n');
+        if (ok) return (size_t)(p - b);
+    }
+#endif
+    if (env)
+        snprintf(b, sizeof(b), "%lld,%d,%.3f,%.3f,%.3f,%.3f,%d,%.3f,1\n", t, uid, cx, cy, w, h, on, rot);
+    else
+        snprintf(b, sizeof(b), "%lld,%d,%.3f,%.3f,%.3f,%.3f,%d,%.3f\n", t, uid, cx, cy, w, h, on, rot);
+    return std::strlen(b);
+}
+
+// Wall time spent inside tick() and the number of calls, since the counters were last taken (cfg profsample
+// prints them with each roll: `gttime:`). Two clock reads a tick.
+inline long long g_tickNanos = 0, g_tickCalls = 0;
+// ...and the CPU cycles the thread spent in it (QueryThreadCycleTime): a wall clock moves with the machine's other
+// work, the cycles of the thread do not, so two builds can be compared while other runs are going.
+inline unsigned long long g_tickCycles = 0;
+inline unsigned long long threadCycles() {
+#ifdef GEODE_IS_WINDOWS
+    ULONG64 c = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &c);
+    return (unsigned long long)c;
+#else
+    return 0;
+#endif
+}
 
 // cfg gtrollcheck: FNV-1a of a whole file (0 when it cannot be read).
 inline unsigned long long fileFnv(const std::string& path) {
@@ -79,6 +149,9 @@ struct Tracked {
     // records the same bytes as before the column existed.
     int env = 0;
     bool emitted = false;
+    // cfg gtrestrow: the previous tick's values as read (not as written), to see the object come to rest
+    float pcx = 0, pcy = 0, pw = 0, ph = 0, prot = 0;
+    bool pvalid = false;
 };
 
 inline std::vector<Tracked> g_objs;
@@ -91,7 +164,80 @@ inline std::vector<Tracked> g_objs;
 // Measured (2026-08-24): solving lv16 then replaying lv20 dereferenced a stale lv16 GameObject*
 // in tick(), crashing on getObjectRect() with a freed (once) or zeroed (once) vtable slot.
 inline GJBaseGameLayer* g_owner = nullptr;
-inline std::ofstream g_out;
+
+// The line end of the recording's rows. The file is written in binary mode, so the end of a line is written
+// by hand: the text-mode stream that wrote it before put a CR in front of every LF on Windows (and nothing on
+// the other platforms), and the file's bytes -- not only its rows -- are what the loop's signatures hash.
+#ifdef GEODE_IS_WINDOWS
+inline constexpr const char* kHeader = "tick,uid,cx,cy,w,h,on,rot\r\n";
+#else
+inline constexpr const char* kHeader = "tick,uid,cx,cy,w,h,on,rot\n";
+#endif
+// b[0..n) is a row from formatRow, ending in a newline unless it was cut: the newline as the file has it.
+inline size_t endRow(char (&b)[160], size_t n) {
+#ifdef GEODE_IS_WINDOWS
+    if (n > 0 && n < sizeof(b) && b[n - 1] == '\n') { b[n - 1] = '\r'; b[n] = '\n'; ++n; }
+#endif
+    return n;
+}
+
+// The recording's file: binary mode, and the rows put together in a buffer of our own that goes to the file
+// a megabyte at a time. A row of a tracked object is written by the million on a heavy level (21.6 M rows in the
+// bootstrap recording of a 167,383-object custom level), and what the stream cost per row -- a locked call into the
+// CRT, its 4 KB buffer, the CR it inserts in text mode -- was a third of the time of tick(): 614 -> 342 ns a row
+// measured on 4 M rows, the same bytes. The stream's own calls stay what cp_flight.hpp uses (is_open, open, close,
+// flush, tellp, seekp); tellp and seekp hand the buffer to the file first, so a position is the file's.
+// Rows reach the file at least every 600 ticks (tick() flushes), as they did: a worker that is killed loses no more.
+class RowFile {
+public:
+    RowFile() : buf_(kBuf) {}
+    ~RowFile() { close(); }
+    RowFile(const RowFile&) = delete;
+    RowFile& operator=(const RowFile&) = delete;
+    bool is_open() const { return f_.is_open(); }
+    void open(const std::string& path, std::ios::openmode mode) {
+        f_.open(path, mode | std::ios::binary);
+        n_ = 0;
+    }
+    void close() {
+        if (f_.is_open()) { drain(); f_.close(); }
+        n_ = 0;
+    }
+    void flush() {
+        if (f_.is_open()) { drain(); f_.flush(); }
+    }
+    long long tellp() {
+        drain();
+        return (long long)f_.tellp();
+    }
+    void seekp(std::streamoff off, std::ios::seekdir dir) {
+        drain();
+        f_.seekp(off, dir);
+    }
+    void write(const char* p, size_t n) {
+        if (n == 0 || !f_.is_open()) return;
+        if (n_ + n > buf_.size()) drain();
+        if (n >= buf_.size()) { f_.write(p, (std::streamsize)n); return; }
+        std::memcpy(buf_.data() + n_, p, n);
+        n_ += n;
+    }
+    void write(const std::string& s) { write(s.data(), s.size()); }
+    void write(const char* s) { write(s, std::strlen(s)); }
+
+private:
+    void drain() {
+        if (n_) { f_.write(buf_.data(), (std::streamsize)n_); n_ = 0; }
+    }
+    static constexpr size_t kBuf = 1u << 20;
+    std::ofstream f_;
+    std::vector<char> buf_;
+    size_t n_ = 0;
+};
+inline RowFile g_out;
+// The flights whose recording nothing reads (a check flight that is expected to clear, the showing of a
+// solution) set this at their reset (hooks_playlayer.cpp): tick() writes nothing, the roll publishes rows=0, and
+// grouptrace_last.txt stays what the last flight that did record left. See level_slice.hpp flightUnrecorded.
+inline bool g_hold = false;
 inline long long g_rows = 0;
 inline long long g_lastTick = -1;   // last tick a row was written at (= depth of the recording)
 
@@ -203,7 +349,7 @@ inline void build(GJBaseGameLayer* l) {
         g_objs.push_back(t);
     }
     g_out.open(std::string(DATA_DIR) + "/grouptrace.txt", std::ios::trunc);
-    if (g_out.is_open()) g_out << "tick,uid,cx,cy,w,h,on,rot\n";
+    g_out.write(kHeader);
     log::info("grouptrace: tracking {} grouped objects", g_objs.size());
 }
 
@@ -232,7 +378,7 @@ inline Roll roll(long long endTick = -1) {
     // "Nothing was recorded" is an answer, and it is THIS attempt's answer -- publish it rather
     // than leaving the previous one standing for the reader to mistake for it (see g_lastRoll).
     if (!g_on || g_objs.empty()) { g_lastRoll = r; return r; }
-    for (auto& t : g_objs) t.emitted = false;
+    for (auto& t : g_objs) { t.emitted = false; t.pvalid = false; }
     if (g_out.is_open()) {
         g_out.close();
         const std::string cur = std::string(DATA_DIR) + "/grouptrace.txt";
@@ -294,7 +440,7 @@ inline Roll roll(long long endTick = -1) {
             }
         }
         g_out.open(cur, std::ios::trunc);
-        if (g_out.is_open()) g_out << "tick,uid,cx,cy,w,h,on,rot\n";
+        g_out.write(kHeader);
     }
     g_rows = 0;
     g_lastTick = -1;
@@ -315,11 +461,11 @@ inline void restart() {
     // of 663/664. The driver's .groups.snap.txt takes that in as-is, so the
     // anchor started from a nearly empty world of "one row per uid".
     if (!g_on || g_objs.empty()) return;
-    for (auto& t : g_objs) t.emitted = false;
+    for (auto& t : g_objs) { t.emitted = false; t.pvalid = false; }
     if (g_out.is_open()) {
         g_out.close();
         g_out.open(std::string(DATA_DIR) + "/grouptrace.txt", std::ios::trunc);
-        if (g_out.is_open()) g_out << "tick,uid,cx,cy,w,h,on,rot\n";
+        g_out.write(kHeader);
     }
     g_rows = 0;
     g_lastTick = -1;
@@ -336,18 +482,54 @@ inline void restart() {
 // them loads the file unchanged. Called right after PlayLayer::resetLevel, not from restart():
 // that runs before the reset, when every object still holds the previous attempt's state.
 inline void snapshotInit() {
-    if (!g_on || g_objs.empty() || !g_out.is_open()) return;
+    if (!g_on || g_hold || g_objs.empty() || !g_out.is_open()) return;
     for (const auto& tr : g_objs) {
         if (!tr.obj) continue;
         const int on = (tr.obj->m_isGroupDisabled || tr.obj->m_isGroupDisabledTemp) ? 0 : 1;
-        g_out << "init," << tr.uid << "," << on << "\n";
+        char b[160];
+        size_t n = (size_t)snprintf(b, sizeof(b), "init,%d,%d\n", tr.uid, on);
+        n = endRow(b, n);
+        g_out.write(b, n);
     }
 }
 
+// The scan below reads five cache lines of each tracked object (the vtable and the node fields at the head, the
+// toggle bytes at +0x28e, the cached rect and its dirty byte at +0x358, the size at +0x394 -- getObjectRect,
+// getObjectRect2) and the objects lie all over the heap: on a heavy level, 9,158 of them a tick, most of the scan's
+// time is the wait for those lines. The next objects' lines are asked for a few iterations ahead. A prefetch of an
+// address that is not there does nothing, and nothing it fetches changes a value.
+inline constexpr size_t kPrefetchAhead = 6;
+inline void prefetchObject(const void* o) {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    if (!o) return;
+    const char* p = static_cast<const char*>(o);
+    _mm_prefetch(p, _MM_HINT_T0);
+    _mm_prefetch(p + 0x40, _MM_HINT_T0);
+    _mm_prefetch(p + 0x28e, _MM_HINT_T0);
+    _mm_prefetch(p + 0x358, _MM_HINT_T0);
+    _mm_prefetch(p + 0x394, _MM_HINT_T0);
+#else
+    (void)o;
+#endif
+}
+
 inline void tick(long long t) {
-    if (!g_on || g_objs.empty() || !g_out.is_open()) return;
+    if (!g_on || g_hold || g_objs.empty() || !g_out.is_open()) return;
     if (g_stride > 1 && (t % g_stride) != 0) return;
-    for (auto& tr : g_objs) {
+    struct TickTimer {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        unsigned long long c0 = threadCycles();
+        ~TickTimer() {
+            g_tickNanos += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            g_tickCycles += threadCycles() - c0;
+            ++g_tickCalls;
+        }
+    } timer;
+    const size_t nObjs = g_objs.size();
+    for (size_t oi = 0; oi < nObjs; ++oi) {
+        auto& tr = g_objs[oi];
+        prefetchObject(oi + kPrefetchAhead < nObjs ? g_objs[oi + kPrefetchAhead].obj : nullptr);
         if (!tr.obj) continue;
         auto r = tr.obj->getObjectRect();
         const float cx = r.origin.x + r.size.width * 0.5f;
@@ -364,22 +546,32 @@ inline void tick(long long t) {
         // not reach the file -- it is the one thing that differs between two games.
         float ex = cx, ey = cy, ew = w, eh = h;
         const int env = areaenv::envelope(tr.obj, ex, ey, ew, eh) ? 1 : 0;
-        if (tr.emitted && on == tr.on && env == tr.env && std::fabs(ex - tr.cx) < kEps
+        // cfg gtrestrow: an object that has come to rest (the same values as the tick before) where the last row
+        // does not have it -- an ease's last stretch moves less than kEps a tick, so it ends up to kEps short of
+        // where it settles, and the reader holds the short value (lv22 coin run: a block 0.044 px below where it
+        // stopped, and a ship GD kills on its corner flew on two ticks in the model)
+        const bool rest = tr.pvalid && ex == tr.pcx && ey == tr.pcy && ew == tr.pw && eh == tr.ph && rot == tr.prot;
+        tr.pcx = ex; tr.pcy = ey; tr.pw = ew; tr.ph = eh; tr.prot = rot; tr.pvalid = true;
+        const bool restRow = g_cfg.gtRestRow && rest && tr.emitted
+            && (std::fabs(ex - tr.cx) >= 0.0005f || std::fabs(ey - tr.cy) >= 0.0005f
+                || std::fabs(ew - tr.w) >= 0.0005f || std::fabs(eh - tr.h) >= 0.0005f
+                || std::fabs(rot - tr.rot) >= 0.0005f);
+        if (!restRow && tr.emitted && on == tr.on && env == tr.env && std::fabs(ex - tr.cx) < kEps
             && std::fabs(ey - tr.cy) < kEps && std::fabs(ew - tr.w) < kEps
             && std::fabs(eh - tr.h) < kEps && std::fabs(rot - tr.rot) < kEps)
             continue;
         tr.cx = ex; tr.cy = ey; tr.w = ew; tr.h = eh; tr.rot = rot; tr.on = on; tr.env = env;
         tr.emitted = true;
         char b[160];
+        size_t n;
         if (env) {
-            snprintf(b, sizeof(b), "%lld,%d,%.3f,%.3f,%.3f,%.3f,%d,%.3f,1\n", t, tr.uid,
-                     ex, ey, ew, eh, on, rot);
+            n = formatRow(b, t, tr.uid, ex, ey, ew, eh, on, rot, true);
             ++areaenv::g_rows;
         } else {
-            snprintf(b, sizeof(b), "%lld,%d,%.3f,%.3f,%.3f,%.3f,%d,%.3f\n", t, tr.uid,
-                     cx, cy, w, h, on, rot);
+            n = formatRow(b, t, tr.uid, cx, cy, w, h, on, rot, false);
         }
-        g_out << b;
+        n = endRow(b, n);
+        g_out.write(b, n);
         ++g_rows;
         g_lastTick = t;
     }
@@ -391,6 +583,46 @@ inline void tick(long long t) {
     // that ONLY finished runs go in; mixing in the attempt in progress would make
     // the harvest depend on polling timing, and runs with the same input would
     // stop reproducing. The commit happens in one place only: roll().
+}
+
+// cfg gtdeathrow: the rows tick(t) would write, as text, with the recorder's state left as it is. Taken
+// at the top of destroyPlayer, BEFORE GD's own call: the death itself changes objects (an On Death
+// trigger switches its group on inside that call; SubZero 4001 has two), and a row taken after it put
+// those switches into the dying tick. Written by commitRows only if the call killed.
+inline std::string g_deathRows;      // the capture, held from the top of destroyPlayer to the roll
+inline long long g_deathRowsT = -1;  // its tick (-1: none held)
+
+inline std::string captureRows(long long t) {
+    std::string out;
+    if (!g_on || g_hold || g_objs.empty() || !g_out.is_open()) return out;
+    for (const auto& tr : g_objs) {
+        if (!tr.obj) continue;
+        auto r = tr.obj->getObjectRect();
+        const float cx = r.origin.x + r.size.width * 0.5f;
+        const float cy = r.origin.y + r.size.height * 0.5f;
+        const float w = r.size.width, h = r.size.height;
+        const float rot = tr.obj->getRotation();
+        const int on = (tr.obj->m_isGroupDisabled || tr.obj->m_isGroupDisabledTemp) ? 0 : 1;
+        float ex = cx, ey = cy, ew = w, eh = h;
+        const int env = areaenv::envelope(tr.obj, ex, ey, ew, eh) ? 1 : 0;
+        if (tr.emitted && on == tr.on && env == tr.env && std::fabs(ex - tr.cx) < kEps
+            && std::fabs(ey - tr.cy) < kEps && std::fabs(ew - tr.w) < kEps
+            && std::fabs(eh - tr.h) < kEps && std::fabs(rot - tr.rot) < kEps)
+            continue;
+        char b[160];
+        size_t n = env ? formatRow(b, t, tr.uid, ex, ey, ew, eh, on, rot, true)
+                       : formatRow(b, t, tr.uid, cx, cy, w, h, on, rot, false);
+        n = endRow(b, n);
+        out.append(b, n);
+    }
+    return out;
+}
+
+inline void commitRows(const std::string& rows, long long t) {
+    if (rows.empty() || !g_out.is_open()) return;
+    g_out.write(rows);
+    for (const char c : rows) if (c == '\n') ++g_rows;
+    g_lastTick = t;
 }
 
 } // namespace grouptrace

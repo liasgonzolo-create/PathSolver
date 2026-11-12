@@ -61,15 +61,65 @@ inline void logVisibilityCrashSwallowed() {
 // camera is not decoration here -- the flight band and camera-driven triggers follow it, and a
 // changed camera would change the simulation. So the flag is raised for the duration of the
 // original call and put straight back; updateCamera runs in the tick loop and never sees it.
+//
+// 2.209 also keeps the time spent on a level in its record -- first- and last-played timestamps and two
+// play-time counters (save keys k138, k139, k142, k143, with k133 marking them valid). The function that
+// commits them is called with no test-mode test, and destroyPlayer carries inline copies of the same
+// writes, so the flag does not stop them. PlayTimeRecord209 is how they are undone: the five ints are
+// read before the original runs and put back after it, the way restoreProgress treats the counters GD
+// writes outside its guarded block. (Found by the memory audit: a driven session that died showed k133
+// appear in the level's record.)
+struct PlayTimeRecord209 {
+    static constexpr std::size_t kOff[5] = {0x6b0, 0x738, 0x73c, 0x740, 0x744};
+    int v[5] = {0, 0, 0, 0, 0};
+    GJGameLevel* level = nullptr;
+    // `layer` is the GJBaseGameLayer whose m_level is the record; the offset check keeps a layout this
+    // code was not written for from being written through.
+    void take(GJBaseGameLayer* layer) {
+#if GEODE_COMP_GD_VERSION >= 22090 && defined(GEODE_IS_WINDOWS)
+        level = nullptr;
+        if (!layer || !layer->m_level) return;
+        if (reinterpret_cast<const char*>(&layer->m_level) - reinterpret_cast<const char*>(layer) != 0x878) return;
+        level = layer->m_level;
+        auto* p = reinterpret_cast<const unsigned char*>(level);
+        for (int i = 0; i < 5; ++i) v[i] = *reinterpret_cast<const int*>(p + kOff[i]);
+#else
+        (void)layer;
+#endif
+    }
+    // True when something had moved and was put back.
+    bool putBack() {
+#if GEODE_COMP_GD_VERSION >= 22090 && defined(GEODE_IS_WINDOWS)
+        if (!level) return false;
+        bool moved = false;
+        auto* p = reinterpret_cast<unsigned char*>(level);
+        for (int i = 0; i < 5; ++i) {
+            auto& x = *reinterpret_cast<int*>(p + kOff[i]);
+            if (x != v[i]) { x = v[i]; moved = true; }
+        }
+        return moved;
+#else
+        return false;
+#endif
+    }
+};
+
 struct NoRecordGuard {
     GJBaseGameLayer* layer;
     bool saved;
+    PlayTimeRecord209 time;
     explicit NoRecordGuard(GJBaseGameLayer* l)
         : layer(progressBlockActive() ? l : nullptr), saved(l && l->m_isTestMode) {
-        if (layer) layer->m_isTestMode = true;
+        if (layer) {
+            layer->m_isTestMode = true;
+            time.take(layer);
+        }
     }
     ~NoRecordGuard() {
-        if (layer) layer->m_isTestMode = saved;
+        if (layer) {
+            layer->m_isTestMode = saved;
+            if (time.putBack()) ++g_progressRestores;
+        }
     }
     NoRecordGuard(const NoRecordGuard&) = delete;
     NoRecordGuard& operator=(const NoRecordGuard&) = delete;

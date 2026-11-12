@@ -48,6 +48,12 @@ inline bool g_twinAudit = false;
 // left with no child by the rule.
 inline int g_minPulse = 0;
 inline int g_inputGrid = 0;
+//   --wavepulse K  --minpulse for the WAVE only (State::mode 4 at the tick the button would change): a wave
+//                  that has just pressed or let go keeps that level for at least K ticks. The user's
+//                  wave-behaviour option (Avoid glitches, third choice): a hand cannot toggle every 1-3
+//                  ticks, which is what the search plans when nothing asks it not to. Off at 0/1; a
+//                  search restriction like --minpulse, not physics.
+inline int g_wavePulse = 0;
 // --gridmap x0:k0,x1:k1,...: the input grid as a step function of the frontier's leading x (the
 // previous layer's, as --capmap reads it). From x_i on the grid is k_i, where 0 means
 // --inputgrid's value and 1 means none; before the first entry it is --inputgrid. Empty =
@@ -118,7 +124,7 @@ inline const CensusField kCensusFields[] = {
      }, true},
     {"boost", [](State& s) { s.boost = 0; s.boost2 = 0; s.a1cLatch = 0; }, true},
     {"arms", [](State& s) { s.fgArm = 0; s.ogLinger = 0; s.holdDead = 0; s.armT = 255; }, true},
-    {"coins", [](State& s) { s.coins = 0; s.items = 0; s.taps = 0; }, true},
+    {"coins", [](State& s) { s.coins = 0; s.items = 0; s.taps = 0; s.tapsX[0] = s.tapsX[1] = s.tapsX[2] = 0; }, true},
     {"latch", [](State& s) { s.portalLatch = GravLatch{}; s.portalLatch2 = GravLatch{}; }, true},
     {"fireB", [](State& s) { for (auto& f : s.fireB) f = 0; }, true},
 };

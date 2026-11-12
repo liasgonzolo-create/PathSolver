@@ -201,12 +201,67 @@ def _sha256_cached(p: Path) -> str:
     return _hash_cache[key]
 
 
-def _worker_problems(root: Path, exe: Path, base: Path) -> list[str]:
+def mod_gd_version(mod_file: Path) -> str | None:
+    """The `gd.win` a packaged .geode was built for (its own mod.json), or None when it cannot be read."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(mod_file) as z:
+            return json.loads(z.read("mod.json").decode("utf-8-sig"))["gd"]["win"]
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
+
+
+# The text a package that presses player 2's button (input bit 1) carries: the mod says it in result.txt when a plan holds
+# such an input for a level that is not two-player (src/mod/hooks_gamelayer.cpp, the injection). A package without the input path has
+# no such text, and reads a mask with bit 1 as a release (the autorun cfg's `input=` line did) or refuses the plan (planfile=).
+# mod.json's version cannot tell the two apart: a development build keeps the version of the release before it.
+PLAYER2_INPUT_MARK = b"a player 2 input (bit 1)"
+
+_p2_cache: dict[tuple[str, int, int], bool] = {}
+
+
+def mod_presses_player2(mod_file: Path) -> bool:
+    """Does the package carry the second player's button path? False when it cannot be read."""
+    import zipfile
+    p = Path(mod_file)
+    try:
+        st = p.stat()
+        key = (str(p), st.st_size, st.st_mtime_ns)
+        if key not in _p2_cache:
+            with zipfile.ZipFile(p) as z:
+                _p2_cache[key] = any(PLAYER2_INPUT_MARK in z.read(n) for n in z.namelist() if n.lower().endswith(".dll"))
+        return _p2_cache[key]
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def same_build(base_version: str, mod_version: str) -> bool:
+    """Is a base frozen as `base_version` a game that a mod packaged for `mod_version` runs on? Equal, or the base is a later
+    build of the same version (the 2.209 hotfix is frozen as 2.209b and the mod stays gd.win 2.209: which of the two executables
+    it is built for is the mod's own exe guard's business)."""
+    return base_version == mod_version or re.fullmatch(re.escape(mod_version) + r"[a-z]+", base_version) is not None
+
+
+def worker_base(root: Path, default: Path = GD_BASE) -> Path:
+    """The base a worker was provisioned from (its worker.json), else `default`. A GDSOLVER_GD_BASE set in the environment wins:
+    that is a person naming the base by hand."""
+    if os.environ.get("GDSOLVER_GD_BASE"):
+        return Path(default)
+    try:
+        rec = json.loads((Path(root) / "worker.json").read_text(encoding="utf-8-sig"))
+        b = Path(rec["base_game_dir"]).parent
+    except (OSError, KeyError, ValueError):
+        return Path(default)
+    return b if (b / MANIFEST).is_file() else Path(default)
+
+
+def _worker_problems(root: Path, exe: Path, base: Path, want_version: str | None = None) -> list[str]:
     man = manifest(base)
     files = man["files"]
     bad = []
-    if man["gd_version"] != GD_VERSION:
-        bad.append(f"the base is GD {man['gd_version']}, mod.json targets {GD_VERSION}")
+    want = want_version or GD_VERSION
+    if not same_build(man["gd_version"], want):
+        bad.append(f"the base is GD {man['gd_version']}, the mod is built for {want}")
     for rel, f in files.items():
         if not rel.startswith("game/") or "/" in rel[5:]:
             continue
@@ -226,12 +281,105 @@ def _worker_problems(root: Path, exe: Path, base: Path) -> list[str]:
     return bad
 
 
-def check_worker(root: Path, exe: Path, base: Path = GD_BASE) -> None:
-    """Refuse to launch a worker that is not running the frozen build."""
-    bad = _worker_problems(root, exe, base)
+# ---- the Geode loader the workers run ------------------------------------------------------------------------------
+#
+# The frozen build above leaves the loader out (NOT_THE_GAME), and Geode updates itself: a session downloads the new
+# loader into geode/update, and the NEXT launch has GeodeUpdater apply it and restart the game WITHOUT our
+# --geode:<mod>.data-root argument. Left alone, workers drift to different loader versions at different moments
+# (6 of 10 on one version and 4 on the next, in the middle of a measurement), the launch that applies the update
+# runs nothing, and a game with no data root is left waiting in the menu.
+#
+# geode_pin.json names the loader the measurements are taken on. Every launch checks the worker against it
+# (check_geode), and a run records which loader it ran on. To move to a new loader, update every idle worker first
+# (a throwaway session twice, then once more to confirm), then change the pin.
+GEODE_PIN = Path(__file__).with_name("geode_pin.json")
+GEODE_FILES = ("Geode.dll", "GeodeUpdater.exe", "XInput1_4.dll")
+ALLOW_GEODE_DRIFT = "GDSOLVER_ALLOW_GEODE_DRIFT"
+
+
+class GeodeMismatch(GDBaseMismatch):
+    """The worker's loader is not the pinned one (or an update is staged). Not a WorkerError, for the same reason
+    as GDBaseMismatch: relaunching cannot fix it."""
+
+
+def geode_drift_allowed() -> bool:
+    """Whether this process runs the deliberate Geode update cycle (GDSOLVER_ALLOW_GEODE_DRIFT=1): the pin is only a
+    warning, and a launch that applied an update is the caller's to handle."""
+    return os.environ.get(ALLOW_GEODE_DRIFT) == "1"
+
+
+def geode_pin() -> dict | None:
+    """The pinned loader ({"version", "files": {name: sha256}}), or None when there is no pin file."""
+    try:
+        return json.loads(GEODE_PIN.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def geode_identity(root: Path) -> dict:
+    """Which loader a worker has: the version its geode/resources/geode.loader/version file names, and the SHA-256
+    of its Geode.dll (None when there is none)."""
+    root = Path(root)
+    try:
+        version = (root / "geode" / "resources" / "geode.loader" / "version").read_text(encoding="utf-8").strip()
+    except OSError:
+        version = "?"
+    if version != "?" and not version.startswith("v"):
+        version = "v" + version              # the file says 5.11.2, Geode's own logs say v5.11.2
+    dll = root / "Geode.dll"
+    return {"version": version, "dll_sha256": _sha256_cached(dll) if dll.is_file() else None}
+
+
+def geode_problems(root: Path, pin: dict | None = None) -> list[str]:
+    """What keeps a worker from running the pinned loader; empty when it does (or when nothing is pinned)."""
+    pin = geode_pin() if pin is None else pin
+    if not pin:
+        return []
+    root = Path(root)
+    bad = []
+    for name in GEODE_FILES:
+        p = root / name
+        want = str(pin["files"][name]).lower()
+        if not p.is_file():
+            bad.append(f"missing {name}")
+        elif _sha256_cached(p).lower() != want:
+            bad.append(f"{name} is not the pinned {pin['version']}'s")
+    staged = root / "geode" / "update"
+    if staged.exists():
+        bad.append("a Geode update is staged in geode/update (the next launch applies it and restarts the game "
+                   "without our arguments)")
+    return bad
+
+
+def check_geode(root: Path) -> None:
+    """Refuse to launch a worker whose Geode is not the pinned one. GDSOLVER_ALLOW_GEODE_DRIFT=1 turns the refusal into
+    a warning, for the deliberate update cycle that moves workers to a new loader."""
+    pin = geode_pin()
+    bad = geode_problems(root, pin)
+    if not bad:
+        return
+    have = geode_identity(root)
+    msg = (f"{Path(root).name} does not run the pinned Geode {pin['version']}: " + "; ".join(bad)
+           + f" (its loader says {have['version']}, Geode.dll {str(have['dll_sha256'])[:12]})")
+    if geode_drift_allowed():
+        print("warning: " + msg, file=sys.stderr, flush=True)
+        return
+    raise GeodeMismatch(msg + f"\n    (`python -m gdtas.gdbase status`; update every idle worker first, or set "
+                              f"{ALLOW_GEODE_DRIFT}=1 for the update cycle itself)")
+
+
+def check_worker(root: Path, exe: Path, base: Path | None = None, mod_file: Path | None = None) -> None:
+    """Refuse to launch a worker that is not running the frozen build.
+
+    The base is the worker's own (worker.json) unless one is given, and the build the mod must be for is the one the package being
+    deployed says (`mod_file`'s gd.win); without a package it is mod.json's, as before. So a 2.2081 worker and a 2.209 worker are each
+    checked against their own base, whichever gd.win the checkout's mod.json names."""
+    base = Path(base) if base is not None else worker_base(root)
+    want = mod_gd_version(mod_file) if mod_file is not None else None
+    bad = _worker_problems(root, exe, base, want)
     if bad:
         raise GDBaseMismatch(
-            f"{Path(root).name} is not running the frozen GD {GD_VERSION} ({base}): "
+            f"{Path(root).name} is not running the frozen GD {want or GD_VERSION} ({base}): "
             + "; ".join(bad)
             + "\n    (`python -m gdtas.gdbase status` for all workers, "
               "`repoint` for a stale Resources)")
@@ -252,10 +400,17 @@ def status(base: Path = GD_BASE, workers_root: Path = WORKERS_ROOT) -> int:
     print(f"base {base}: GD {man['gd_version']}, steam build {man['steam_buildid']}, "
           f"frozen {man['frozen_utc']}")
     n_bad = 0
+    pin = geode_pin()
+    print(f"Geode pin: {pin['version'] if pin else 'none (no geode_pin.json)'}")
     for root in _workers(workers_root):
-        bad = _worker_problems(root, _worker_exe(root), base)
-        n_bad += bool(bad)
-        print(f"  {root.name:<10} {'ok' if not bad else '; '.join(bad)}")
+        wb = worker_base(root, base)       # each worker against the base it was provisioned from
+        bad = _worker_problems(root, _worker_exe(root), wb, want_version=manifest(wb)["gd_version"])
+        gbad = geode_problems(root, pin)
+        gid = geode_identity(root)
+        n_bad += bool(bad) or bool(gbad)
+        geode = (f"Geode {gid['version']} {str(gid['dll_sha256'])[:8]} "
+                 + ("(no pin)" if not pin else "pinned" if not gbad else "NOT PINNED: " + "; ".join(gbad)))
+        print(f"  {root.name:<10} [{wb.name}] {'ok' if not bad else '; '.join(bad)} | {geode}")
     return 1 if n_bad else 0
 
 

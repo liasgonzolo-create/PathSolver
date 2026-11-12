@@ -127,6 +127,10 @@ void adoptOutcome(const SolveOutcome& s) {
     o.trigMaxKeptX = s.trigMaxKeptX;
     o.trigMapSig = s.trigMapSig;
     o.unsupported = s.unsupported;
+    o.resimKind = s.resimKind;
+    o.dumpT = s.dumpT;
+    o.dumpStart = s.dumpStart;
+    o.startStateT = s.startStateT;
 }
 
 std::string levelCsv() { return dp::g_levelCsv; }

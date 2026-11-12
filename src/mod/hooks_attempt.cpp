@@ -18,6 +18,7 @@ using namespace p1;
 constexpr double kFirstAttemptCount = 0.0;
 
 class $modify(AttemptPinLayer, GJBaseGameLayer) {
+    GDSOLVER_HOOK_GUARD()
     // Type 5 is the attempt count (+0x3084 on the layer); every other type is the game's.
     double getItemValue(int type, int id) {
         const double v = GJBaseGameLayer::getItemValue(type, id);
@@ -30,21 +31,26 @@ class $modify(AttemptPinLayer, GJBaseGameLayer) {
                         + (g_attemptOne ? ", answered as on the first attempt"
                            : g_attemptCount >= 0 ? ", answered as " + std::to_string(g_attemptCount)
                                                      + " (cfg attemptcount)"
+                           : g_attemptAutoCount >= 0 ? ", answered as " + std::to_string(g_attemptAutoCount)
+                                                     + " (attemptauto)"
                                                  : std::string(", left as it is")));
         if (g_attemptOne) {
             ++g_attemptReadsPinned;
             return kFirstAttemptCount;
         }
-        // cfg attemptcount (config.hpp): the same count on every attempt
-        if (g_attemptCount >= 0) {
+        // cfg attemptcount (config.hpp): the same count on every attempt; cfg attemptauto picks one
+        // for a level the scan finds attempt-dependent (level_entry.hpp)
+        const long long pin = g_attemptCount >= 0 ? g_attemptCount : g_attemptAutoCount;
+        if (pin >= 0) {
             ++g_attemptReadsPinned;
-            return (double)g_attemptCount;
+            return (double)pin;
         }
         return v;
     }
 };
 
 class $modify(AttemptPinEffects, GJEffectManager) {
+    GDSOLVER_HOOK_GUARD()
     // Called by resetEffects (every attempt) and loadFromState (every checkpoint restore) to copy
     // the kept items back. Not copying them leaves those items where a first attempt has them.
     void transferPersistentItems() {

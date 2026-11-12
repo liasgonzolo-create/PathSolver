@@ -41,6 +41,7 @@ bool moveVaries(EnterEffectInstance* inst) {
 }  // namespace
 
 class $modify(AreaEnvLayer, GJBaseGameLayer) {
+    GDSOLVER_HOOK_GUARD()
 #ifdef GEODE_IS_WINDOWS
     void processAreaMoveGroupAction(cocos2d::CCArray* objects, EnterEffectInstance* instance,
                                     cocos2d::CCPoint position, int outerMin, int outerMax,

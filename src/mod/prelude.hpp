@@ -22,6 +22,7 @@
 #include <Geode/modify/FMODAudioEngine.hpp>
 #include <Geode/modify/AppDelegate.hpp>
 #include "mod/gd_offsets.hpp"   // raw offsets into GD, per platform
+#include "mod/exe_guard.hpp"    // no hooks, no start-up work on a GD build the mod was not made for
 #ifdef GEODE_IS_WINDOWS
 #include <Windows.h>
 #endif

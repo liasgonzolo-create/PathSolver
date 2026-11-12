@@ -1,0 +1,54 @@
+; Exports of the 2.209 libcocos2d.dll that the SDK's libcocos2d.lib (made for 2.2081) does not list: functions 2.209 added to cocos2d classes (CCApplication,
+; CCDirector, CCEGLView, the dispatchers, ...), changed signatures, and the two classes the 2.209 bindings name as bases (CCTouchClipper,
+; CCKeyboardActionManager). CMakeLists.txt turns this file into an import library for 2.209 builds, so the mod can link what the game headers declare.
+LIBRARY libcocos2d.dll
+EXPORTS
+    ??0CCKeyboardActionManager@cocos2d@@QEAA@$$QEAV01@@Z
+    ??0CCKeyboardActionManager@cocos2d@@QEAA@AEBV01@@Z
+    ??0CCKeyboardActionManager@cocos2d@@QEAA@XZ
+    ??0CCTouchClipper@cocos2d@@QEAA@AEBV01@@Z
+    ??0CCTouchClipper@cocos2d@@QEAA@XZ
+    ??1CCKeyboardActionManager@cocos2d@@UEAA@XZ
+    ??1CCTouchClipper@cocos2d@@UEAA@XZ
+    ??4CCKeyboardActionManager@cocos2d@@QEAAAEAV01@$$QEAV01@@Z
+    ??4CCKeyboardActionManager@cocos2d@@QEAAAEAV01@AEBV01@@Z
+    ??4CCTouchClipper@cocos2d@@QEAAAEAV01@AEBV01@@Z
+    ??_7CCKeyboardActionManager@cocos2d@@6B@
+    ??_7CCTouchClipper@cocos2d@@6B@
+    ?applicationWillTerminate@CCApplicationProtocol@cocos2d@@UEAAXXZ
+    ?applyScale@CCNode@cocos2d@@UEAAXM@Z
+    ?applySwapInterval@CCApplication@cocos2d@@QEAAXXZ
+    ?ccDeflateMemory@ZipUtils@cocos2d@@SAHPEAEIPEAPEAEH@Z
+    ?checkMonitorChanged@CCApplication@cocos2d@@QEAAXXZ
+    ?clearQueuedInput@CCEGLView@cocos2d@@QEAAXXZ
+    ?compressString@ZipUtils@cocos2d@@SA?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@AEBV34@_NHH@Z
+    ?dispatchRightClick@CCMouseDispatcher@cocos2d@@QEAA_NMM@Z
+    ?dispatchToTopDelegate@CCKeyboardDispatcher@cocos2d@@IEAAXW4enumKeyCodes@2@_NAEBV?$vector@HV?$allocator@H@std@@@std@@N@Z
+    ?flushPendingDelegates@CCKeyboardDispatcher@cocos2d@@QEAAXXZ
+    ?flushPendingDelegates@CCMouseDispatcher@cocos2d@@IEAAXXZ
+    ?getActionManager@CCKeyboardDispatcher@cocos2d@@QEBAPEAVCCKeyboardActionManager@2@XZ
+    ?getCaptureMode@CCKeyboardDispatcher@cocos2d@@QEBA_NXZ
+    ?getLastInputTime@CCDirector@cocos2d@@QEAANXZ
+    ?getLastRepeat@CCKeyboardDispatcher@cocos2d@@QEBA_NXZ
+    ?getMousePosition@CCEGLView@cocos2d@@UEBA?AVCCPoint@2@XZ
+    ?getMousePosition@CCEGLViewProtocol@cocos2d@@UEBA?AVCCPoint@2@XZ
+    ?getParticleDrawCost@CCParticleSystem@cocos2d@@QEAAMXZ
+    ?getTouchCount@CCTouchDispatcher@cocos2d@@QEBAIXZ
+    ?giveMenuTouchPriority@CCMenu@cocos2d@@QEAAXH@Z
+    ?handleAction@CCKeyboardDelegate@cocos2d@@UEAA_NH_NN@Z
+    ?handleGlobalAction@CCKeyboardActionManager@cocos2d@@UEAA_NH_N@Z
+    ?handleRightClick@CCEGLViewProtocol@cocos2d@@QEAAXMM@Z
+    ?loadRootSubDictFromCompressedFile@DS_Dictionary@@QEAA_NPEBD_N@Z
+    ?noteInput@CCDirector@cocos2d@@QEAAXXZ
+    ?offsetPosition@CCNode@cocos2d@@UEAAXMM@Z
+    ?ownerLevelFor@CCTouchDispatcher@cocos2d@@AEAA_NPEAVCCTouchDelegate@2@AEAH@Z
+    ?ownerLevelOf@CCTouchDispatcher@cocos2d@@QEAA_NPEAVCCNode@2@AEAH@Z
+    ?registerForcePrio@CCTouchDispatcher@cocos2d@@QEAAXPEAVCCObject@2@HH@Z
+    ?releaseAllKeys@CCKeyboardDispatcher@cocos2d@@QEAAXN@Z
+    ?resyncVerticalSync@CCApplication@cocos2d@@QEAAXXZ
+    ?rightClick@CCMouseDelegate@cocos2d@@UEAA_NMM@Z
+    ?saveRootSubDictToCompressedFile@DS_Dictionary@@QEAA_NPEBD_N@Z
+    ?scanCodeForPositionalKey@CCEGLView@cocos2d@@SAHH@Z
+    ?scrollWheel@CCMouseDelegate@cocos2d@@UEAA_NMM@Z
+    ?setActionManager@CCKeyboardDispatcher@cocos2d@@QEAAXPEAVCCKeyboardActionManager@2@@Z
+    ?setCaptureMode@CCKeyboardDispatcher@cocos2d@@QEAAX_N@Z

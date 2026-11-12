@@ -1,6 +1,7 @@
 #pragma once
 // Session configuration (autorun.cfg keys), data root, shared session state.
 #include "mod/prelude.hpp"
+#include "mod/plan_edges.hpp"   // InputCmd, pushInputMask, writeInputLines
 #include <memory>
 
 namespace p1 {
@@ -56,7 +57,8 @@ inline void updateWindowTitle();   // the definition comes after the g_cfg / g_s
 // of both, because psnap.hpp and repair.hpp (tidyPlayerModes) read it.
 inline bool g_psnapPlayerWritten = false;
 
-struct InputCmd { int step; bool down; };
+// One edge of a button from `step` on: player 1's jump, or (p2) player 2's -- the second button of a two-player level.
+// A plan file's `input=<step>,<mask>` is the buttons held from that tick, bit 0 player 1's jump and bit 1 player 2's (plan_io.hpp).
 struct ToggleCmd { int step; std::string mode; };
 
 // The glitch-avoid mode's margins when it is simply switched on (the play menu, `glitchavoid=1`),
@@ -71,6 +73,18 @@ struct ToggleCmd { int step; std::string mode; };
 constexpr double kGlitchPortalDefault = 15.0;
 constexpr double kGlitchWaveDefault = 5.0;
 constexpr double kGlitchEmbedDefault = 14.0;
+// The wave-behaviour choice of Avoid glitches (the play menu's third value, `avoidwave=1`): the shortest
+// press or release the wave is planned with, in ticks (240 a second), and the clearance it keeps from
+// the floor, the ceiling and solids, in px. PROVISIONAL until measured on the official wave sections.
+constexpr int kWavePulseDefault = 12;
+constexpr double kWaveCentreDefault = 10.0;
+// The wave's PREFERENCES (dp --wavetidy / --wavetoggle, thread_pool.hpp): a cost per wave tick that grows with the
+// square of how far the wave sits from the middle of its corridor (at most this much, at a wall), and a cost per
+// change of the button. Both only order the routes, they drop none. Measured offline on three official wave
+// levels, with the floor and the clearance above on: the median button run 12..18 -> 26..30 ticks, the 90th
+// percentile of the distance from the middle 0.55..0.62 -> 0.29..0.45 of the half-corridor.
+constexpr double kWaveTidyDefault = 8.0;
+constexpr int kWaveToggleDefault = 4;
 
 struct Config {
     bool enabled = false;
@@ -85,6 +99,25 @@ struct Config {
     // The generator is py/mklevel.py; the measured table of placeable objects is
     // py/objpalette.py.
     std::string levelFile;
+    // cfg `uishow=<kind>` (diagnostic, default none): show one of the play menu's popups over the main menu 3 s after it appears -- info0 / info1 / info2 (Options' (i)
+    // texts), options, menu (the Solve menu for cfg level / levelfile, with Options set to something other than the defaults) -- so a layout can be looked at without playing to it.
+    // `press` is the other use: the menu for that level with Start pressed in the mode cfg `uimode` names (1 Replay, 2 Solve), the player's route minus the clicks.
+    std::string uiShow;
+    // cfg `replaypanel` (0 off, 1 the whole path -- the default --, 2 its last stretch; 3 is read as 1; the replay-panel key goes
+    // round full -> recent -> off whatever this says): GD's own record of the deepest verified attempt, with the plan the solver's
+    // latest search found joined on from its anchor (the walk the model made of it, in another colour), played in the free
+    // area from the middle of the screen to the top-right, with the level, the run's recording of the moving parts and the
+    // points where the model was wrong (replay_panel.hpp). Drawn only while a solve runs AND the screen is dark (F5 off), never
+    // in the showing of the solution; with the screen on it is hidden, its state kept, and the keys are the game's. It reads
+    // what the solver has already kept and writes nothing back; the research harness turns it off (gdtas/worker.py), since
+    // nobody watches a worker. `replaypanelspan=<ticks>` is the length of the recent stretch (default 4800 = 20 s),
+    // `replaypanelspeed=<x>` the pace it starts at (a notch of the game's spectating speeds; 1 = real time).
+    int replayPanel = 1;
+    long long replayPanelSpan = 4800;
+    // cfg `replaypanelplans=<n>` (default 8): how many of the model's latest plans the panel draws together (the deepest is the path's
+    // end and what the camera follows, the rest are ghosts beside it, each a figure of its player's mode; 1 = only the deepest).
+    long long replayPanelPlans = 8;
+    float replayPanelSpeed = 1.f;
     // levelfiletype=main: build that level as a MAIN (official) level rather than an editor
     // one. Measured 2026-09-22: in an editor-type level GD loads none of the secret coins
     // (id 142) -- the coin rig in py/mklevel.py placed 22 and kept none, and six official
@@ -108,6 +141,19 @@ struct Config {
     // "level record changed:" line names the fields GD wrote. Achievements, statistics and
     // coins have no such switch and are blocked unconditionally.
     bool progressBlock = true;
+    // cfg `netblock` / `saveblock` / `memaudit`: the three layers under the function-level gate
+    // (see record_gate.hpp). All ON by default and meant to stay on; each is a switch only so a
+    // test can show the layer is not vacuous (a request let through, a save let through, an
+    // audit that fires). `nettest=1` makes the session send one harmless request to a closed
+    // local port, to show the network layer catches a real call.
+    bool netBlock = true;
+    bool saveBlock = true;
+    bool memAudit = true;
+    bool netTest = false;
+    // cfg `savetest=1`: the session asks the game's own atomic file writer (2.209) to write one small file named
+    // gdsolver-savetest.dat in the save folder, to show the save layer refuses a real call (savetest=1 with
+    // saveblock=0 is the positive control: the file appears).
+    bool saveTest = false;
     float fastdt = 0;   // >0: fast mode. dt passed per update call (e.g. 1.0 = 240 ticks)
     int fastloops = 1;  // in fast mode, number of update calls per rendered frame
     // cfg `framebudgetms`: in fast mode, also end the frame's batch once this much wall time has
@@ -145,6 +191,22 @@ struct Config {
     // (dphorizon) for when the run is stuck -- the inverse of the old habit. 0 = the old habit.
     // The no-death recording pass and the restart from the start still use the whole level.
     int dpStepHorizon = 3000;
+    // cfg `dphorizongrow` (0 = off; a percent >= 100, needs dpstephorizon): under the adaptive length, a plan the
+    // game flew past its step is answered with that percent of the ticks it flew (at least the step, at most the
+    // level, at most dphorizonmax) instead of the whole level. A long ship/wave level: the whole-level answer made
+    // four jobs (rounds 3, 4, 8, 10) read 24,000 ticks ahead to the model's own wall, 916 s of a 1,715 s run,
+    // where the game flew 3,000 to 7,300 ticks before it parted from the model.
+    int dpHorizonGrow = 200;   // on at 200 % by default (release flags, 2026-10-17); cfg dphorizongrow=0 is the off arm
+    // cfg `dphorizonmax` (0 = none): the longest plan dphorizongrow asks for. At 200 % a 7,000-tick flight asked
+    // 14,000 ticks, and one search that long near the wall took 100 to 230 s.
+    int dpHorizonMax = 0;
+    // cfg `dphorizongrowmin` (ticks, 60000): dphorizongrow acts only on a level whose whole length in ticks is at least this; a shorter one keeps the whole-level answer.
+    // Measured on the official 22, nocoin, one session each: with the growth at 200 % lv20 took 8 rounds (3 without), lv21 7 (2), lv22 25 rounds in 1,467 s (16 in 503 s);
+    // on the long ship/wave level it was made for (84,333 ticks) it took 1,715 s to 1,238 s. The levels this threshold keeps out are all under 40,000 ticks.
+    int dpHorizonGrowMin = 60000;
+    // cfg `dpretirestall` (3): rounds without 100 px more that a speed-switched plan gets before the plan it replaced
+    // is flown again (repair.hpp RetiredBest). Under dpneedspeed only.
+    int dpRetireStall = 3;
     // cfg `dpseed`: the seed handed to the search at the start of a level's run (dp_bridge
     // runBegin). Part of the host's promise to a search: a method that draws random numbers draws
     // them from this, so the same seed gives the same plan (dpsearch=montecarlo does; dp does not).
@@ -180,12 +242,6 @@ struct Config {
     // cfg `dpoffboardkill` (off): pass the loop's playfield bound to the search (--offboard). It
     // closes an off-board stall the default route does not reach, and costs lv22 34 s on it.
     bool dpOffBoardKill = false;
-    // cfg `offboardtp` (on by default since 2026-10; 0 = off): the loop's off-board credit
-    // (repair.hpp offBoardTick) disarms on a teleport (a one-tick |dy| over kOffBoardTpDy) and
-    // re-arms once the player is back inside GD's band -- lv22 with coins teleports a spider to y
-    // 3,210 while the band stays 90/414 for 112 ticks, and the credit fired at the teleport while
-    // GD flew on (see offBoardTick).
-    bool offBoardTp = true;
     // cfg `offboardfree` (on by default since 2026-10-06; 0 = off): the off-board credit skips the
     // rows recorded in Free Mode, where GD's band bounds no mode and says nothing about where the
     // player is (see offBoardTick).
@@ -194,14 +250,6 @@ struct Config {
     // row whose band moved by more than kOffBoardTpDy at either edge while the player did not -- a
     // cutscene's zoom rewrites GD's band around the camera (see offBoardTick).
     bool offBoardBand = true;
-    // cfg `anchorboardarm` (on by default since 2026-10; 0 = off): a ladder rung is "off the board" only by the
-    // test the off-board death credit uses (repair.hpp offBoardTick: the band counts once the
-    // player has been inside it in this attempt, a teleport disarms it, Free Mode rows are skipped),
-    // not by the raw band of the anchor's row. GD's band survives resetLevel, so an attempt can
-    // carry the band of a later section of an earlier one -- a custom level's anchors at
-    // t=2,469..3,990 (UFO, y 756..1,230) were all refused against a band of 3,180..3,450, the
-    // ladder fell back before a teleport at t=1,760, and the loop ran out of rungs there.
-    bool anchorBoardArm = true;
     // cfg `dpadaptivehorizon` (needs dpstephorizon): choose the next plan length from where the
     // game ended the last one. Killed within the step of its anchor = the model is wrong here, plan
     // the step; alive past it = the model is right here, plan the level. Always on since the flag clean-up.
@@ -224,6 +272,20 @@ struct Config {
     // A round count since the last new depth was measured too and rejected: 4003 has cleared 76
     // rounds after its last new depth, which leaves no useful N.
     int dpTopStop = 0;
+    // cfg `dpcapenvrepeat=K` (default 3, 0 = off): from the K-th death of this run at the same wall (the same 4-tick bucket,
+    // counted by g_deathRuns) the searches are asked for --capenvelope as well, until the run gets deeper. The cap
+    // keeps a layer's states by a stride in layer order; the envelope keeps the extremes of each class first
+    // (dp search_dp.hpp). A custom level dies 8 times in a row at one wall that every cap of the
+    // ladder (2000) fails and that cap 2000 with the envelope passes; the flag is not worth its cost as a default
+    // (the custom 22 at 1200 s: 21 cleared without it, 19 with it), only once a wall has repeated.
+    int dpCapEnvRepeat = 3;
+    // cfg `dpmissedportalrepeat=K` (default 3, 0 = off): from the K-th death of this run at the same wall, the loop asks the
+    // missed-portal question (repair.hpp missedPortalTick) without waiting for the ladder to run out of anchors: a
+    // mode portal the run crossed without coming out in its mode is where the next rung goes back to, with the
+    // crossing forced. Cube portals count (they are left out of the hint's list otherwise: a level may hold ones
+    // nothing needs to take). A custom level dies 8+ times in a row at a wall whose cause is the
+    // spider branch taken at a cube portal 2,000 ticks earlier, while every rung of the ladder finds some tail.
+    int dpMissedPortalRepeat = 3;
     // cfg `dpcaptiers=0` (1 = on, the default): escalate() skips the capacity tiers (kCapTiers in
     // repair.hpp), so the restart from the start comes next and runs at the base setting instead
     // of inheriting the top tier's 40,000 states for the whole level. Asked because, over the
@@ -348,6 +410,25 @@ struct Config {
     // if so, the next windows begin before that portal and keep the other size (repair.hpp
     // stateFire).
     bool dpSecState = true;
+    // cfg `dpneedspeed` (off; 1 = on; needs dpsecauto): the same question for player 1's SPEED. A wall the loop keeps
+    // dying at -- the stall rule that would hand it to a section solve -- is asked first whether the speed the plan
+    // has there is what stops it: the plan's speed changes before the wall are tried, newest first, each by a
+    // search from just before the change that must not cross the wall's x at the speed the plan has there (dp
+    // --needspeed, repair.hpp speedArm). A speed cannot be swapped into the anchor the way a size can (a faster
+    // player is at another place at the same tick), so there is no probe; the search is the question.
+    // The size is asked first: this waits until stateFire has settled it at the wall (a size wall costs a speed
+    // question per change otherwise). Flights that were at different speeds at the same x are ranked by x, not by
+    // tick, when they died 1,000 px or more apart on upright ground (kLaneMargin), and once the run has crossed a
+    // wall in another lane the changes up to that wall are not asked again.
+    // With cfg `stallbound` the loop's wedge bound is the guard's (repair.hpp onDeath), which a long level needs.
+    bool dpNeedSpeed = true;   // on by default (release flags, 2026-10-17); cfg dpneedspeed=0 is the off arm
+    // cfg `dpspeedfirst` (on by default; 0 = off; needs dpneedspeed and dpsecauto): the speed question goes AHEAD of the size probe at a wall
+    // where a flight in another speed lane has died clearly short of the deepest plan (the "ranked by x, not deeper" case,
+    // kLaneMargin). Such a flight says the wall is not one the size probe could settle: the ladder's claim for the other
+    // lane is being tried the expensive way, round after round. A long custom level's 2026-10-17 profile run: the
+    // wall at t=30794 took three ladder jobs (56, 286 and 112 s at the same anchor), a section solve and a size probe
+    // before the speed question was asked, and it was answered in 15 s -- 6 iterations, 56% of the 1265 s wall.
+    bool dpSpeedFirst = true;
     // cfg `dpsecchain` (on; 0 = off; needs dpsecauto): a wall right behind the pin -- the splice died
     // within kAutoCreep ticks of its end, which leaves the ladder nothing to plan with -- doubles
     // the next window's margin, and doubles it again for each such wall in a row (up to 8x).
@@ -432,6 +513,14 @@ struct Config {
     // a count. Why a count is wrong: a round at the end of 4001 costs a median 3.5 s (the model
     // plans only what is left), one on 4002 16 s, and a rung about 17 s on either.
     bool dpSecRent = true;
+    // cfg `dpsecboxwait` (on; 0 = off; needs dpsecauto and routeprereq): no section solve while the
+    // deepest death was ranked at a box a coin waits on (repair.hpp deathNeed). The ordinary search is
+    // the one told to enter that box (--needtrig-uid); a section solve is not, and it cannot take the
+    // coin in a window at the box either. SubZero 4002 with coins (trunk 9d7b4768): the rent fired a
+    // rung on the second round at the third coin's box uid 18126, and thirteen rounds of rungs widening
+    // to 1,654 ticks never opened it (TIMEOUT at 1,200 s); with dpsecauto=0 the same route opened it on
+    // the second round at the box and cleared in 6 rounds.
+    bool dpSecBoxWait = true;
     int dpSecRungPrior = 15;
     // cfg `dpsecwallbudget=<s-equiv>` (0 = none): the section-solve work one wall episode may spend,
     // in the rent's currency (1 = 1e6), counted from the rungs' replay ticks and search steps -- never
@@ -479,6 +568,18 @@ struct Config {
     // solve goes on on a fresh copy with a full carry instead of on the level itself -- once per
     // wall (levelslice::onGiveUp).
     bool sliceGiveUpCopy = true;
+    // cfg `stagecuts=<x1>,<x2>,...` (off when empty): the level is solved in pieces, each on the level cut at
+    // an x, and a piece's plan is flown first on the next, the last being the level itself (level_slice.hpp,
+    // "STAGES"). Used instead of the slice's own cut.
+    std::string stageCuts;
+    // cfg `stagecutcheck=<0|1|2>` (default 2): what is done about a cut that splits a group a kept trigger reads
+    // as a position (level_slice.hpp, "STAGES"). 0 = nothing; 1 = a log line; 2 = the cut moves to the nearest x
+    // that does not, within `stagecutwindow` px (default 3000), or is dropped when there is none.
+    int stageCutCheck = 2;
+    int stageCutWindow = 3000;
+    // cfg `stagebreak=<n>` (test only, 0 = off): the plan one piece hands the next keeps its first n inputs -- a
+    // hand-off that parts from the clearing flight on purpose, to see that the check says so.
+    int stageBreak = 0;
     // cfg `slicecount=1`: print what the cut would remove and end the session without solving
     // (a census of levels against the threshold).
     bool sliceCount = false;
@@ -491,7 +592,7 @@ struct Config {
     bool sliceNoTouch = true;
     // cfg `slicetriggers` (on by default since 2026-10; 0 = off): the cut drops the triggers that
     // can only act on what the run cannot depend on -- movers outside the relevant groups and
-    // cosmetic triggers (slice.hpp).
+    // cosmetic triggers (slice.hpp). A run that takes coins keeps them all (level_slice.hpp maybeSlice).
     bool sliceTriggers = true;
     // cfg `sliceuids` (on; 0 = off): an object the cut leaves out is replaced in its place by a
     // placeholder that takes the same uids, so the copy numbers its objects as the level does
@@ -503,6 +604,18 @@ struct Config {
     // other groups than the level's: a plan lived past a spike in the copy and died on it in the
     // level. Placeholders then move with their groups, which costs time on group-heavy levels.
     bool sliceKeepGroups = true;
+    // cfg `sliceverifyrec` (0 = off, the default; 1 = the old behaviour): the check flights on the level itself --
+    // the plan that cleared the copy, a wall check -- do not record the moving geometry. Nothing reads that
+    // recording once the plan has cleared (a clear is filed and the showing follows), and writing it was 13 s of a
+    // 21 s flight on a 167,383-object level (21 s against the 5 s of a replay with no recording). A clear check that
+    // dies is flown again with the recording, from a fresh swap, before its death is read (level_slice.hpp
+    // onVerifyDeath): the loop that takes the death on the level itself starts from that recording. A wall check's
+    // death is always taken over by the slice, which reads the player's rows, never the recording.
+    bool sliceVerifyRec = false;
+    // cfg `sliceverifybreak=<n>` (test only, 0 = off): the plan handed to the level after the copy cleared loses every
+    // input past the n-th, so that the check flight dies where the copy's plan did not -- a verification that fails,
+    // wrong on purpose like slicenoposition, to run the take-overs and the second flight of sliceverifyrec.
+    int sliceVerifyBreak = 0;
     // cfg `slicefirstref` (on by default since 2026-10; 0 = off): before a wall check's death is
     // read as the cut's, the plan is flown on a fresh copy and the level's flight is compared with
     // that first attempt instead of the copy's deepest attempt (level_slice.hpp onRefFlightEnd).
@@ -520,20 +633,6 @@ struct Config {
     // extra replay would be 90 seconds of nothing before the session could close).
     // cfg `dpshow=<0|1>` forces it either way, which is also how the path gets tested off-screen.
     int dpShow = -1;
-    // What the solve loop gives the search besides the collider table. All on by default; each
-    // is separately switchable because they interact, and "which of these three did that" is a
-    // question that comes up every time one of them changes.
-    //   dpfixups  learn the first model/GD divergence of each replay and apply it (repair.hpp)
-    //   dpworld   the trigger map, the group table and the turned hitboxes (buildPois writes
-    //             them); implies --needtrig-unseen
-    //   dpgroups  where the moving geometry went, recorded from the run's own replays
-    bool dpFixups = true;
-    bool dpWorld = true;
-    bool dpGroups = true;
-    // cfg `needpinrelease` (on; 0 = off): a needtrig box the anchor has already passed, which empties
-    // the frontier before tick 1, is released at once when a section-solve pin stands behind the
-    // anchor -- no rung can go back past the pin to enter it (repair.hpp runLadder).
-    bool needPinRelease = true;
     // cfg `dpcoinwin=<yBin>,<vyBin>,<len>` (60,2,700 by default since 2026-10; 0 = off): dp
     // --coinwin with coinroute, the alive cap's classes split by (y, vy) cell in the last <len> px
     // before each coin a state still lacks, so a minority route to the coin is not thinned away (dp
@@ -549,6 +648,18 @@ struct Config {
     double glitchWave = 0.0;
     double glitchEmbed = 0.0;   // cfg `glitchembed=<px>`: dp's g_glitchEmbed
     bool glitchDeco = false;    // cfg `glitchdeco=1`: dp's --glitchdeco (hazard look-alikes)
+    // THE WAVE'S BEHAVIOUR (Avoid glitches, third choice): cfg `avoidwave=1` (with `glitchavoid=1`), or
+    // `wavepulse=<ticks>` / `wavecentre=<px>` on their own. 0 = off, the default. Searches only, like the
+    // margins above (baseArgs): dp's --wavepulse (the wave's button keeps a level at least this long) and
+    // --wavecentre (the wave stays this far from the floor, the ceiling and solids). A search that finds no
+    // route with them is retried without them (repair.hpp escalate, g_waveRelaxed) and the run says so.
+    int wavePulse = 0;
+    double waveCentre = 0.0;
+    // ...and its two preferences, cfg `wavetidy=<cost>` / `wavetoggle=<cost>` (avoidwave=1 sets both defaults): dp's
+    // --wavetidy / --wavetoggle. Unlike the two above they drop nothing, so a search that relaxes the wave
+    // behaviour keeps them.
+    double waveTidy = 0.0;
+    int waveToggle = 0;
     // cfg `dpfixp2`: let the SECOND BODY's transition error decide, on its own, that a dual
     // transition is worth a record -- see writeFixup's no-op test, which is where it acts.
     //
@@ -576,6 +687,62 @@ struct Config {
     // (--bandtrack). On since 81f2a09; off is how that commit's remaining half is
     // A/B'd, since lv22's second cold regression bisects to it.
     bool dpBandTrack = true;
+    // cfg `dppin` (OFF): hand the model the ticks GD holds player 1 on a spot the physics does not give it
+    // (--pinrows, built from the anchor source's x column in addWorldArgs): a Teleport trigger a Spawn loop fires
+    // again every tick, onto a target something is moving. The model fires a teleport trigger once, at its crossing.
+    bool dpPin = false;
+    // cfg `dptap` (OFF): on a two-player level, press the second player's button a few ticks after the first player's plan passes a Tap trigger
+    // (dp --p2tappress): what the Tap opens is not in the level data, so the press is made blind and the game's own recording of the attempt
+    // shows the door to every later call.
+    bool dpTap = false;
+    // cfg `dpswitch` (OFF): on a two-player level, run the level twice more before the first solve with one body pressing on a schedule (nodeath) to see what
+    // each button does to the world, and give the search the table (dp --p2switch). See repair.hpp "cfg dpswitch".
+    bool dpSwitch = false;
+    // cfg `dpincanchor` (ON since 2026-10-21; 0 is the off arm): place the objects an autonomous trigger moves by a closed form only on the ticks something about them can change
+    // (dp --incanchor). Exact: the same plan, a quarter of the placement time on a level with 25,000 moving objects.
+    bool dpIncAnchor = true;
+    // cfg `dprlbound` (1500 since 2026-10-21; 0 = off): probe each rung of the resim ladder with a search to the walk's death plus this many ticks before the rung's full
+    // search (dp --rlbound).
+    long long dpRlBound = 1500;
+    // cfg `dprlspread0` (OFF): a rung of the resim ladder searches from one state, so the crossings it already made are shared by every group of that
+    // search (dp --rlspread0).
+    bool dpRlSpread0 = false;
+    // cfg `dpstatecross` (ON since 2026-10-21; 0 is the off arm): each state dates the autonomous triggers it crossed later than the frontier's leader by its own crossing, instead of a group
+    // working its present speed back from its x (dp --statecross; the model-walk dates by its own crossing too, as --witnessauto).
+    bool dpStateCross = true;
+    // cfg `dpareaadd` (ON since 2026-10-22; 0 is the off arm): an Area Move acts on an object a closed form also moves, on top of the closed form's place (dp --areaadd).
+    bool dpAreaAdd = true;
+    // cfg `dpcrosscx` (OFF): --statecross keeps one record per x of the triggers it dates late, not one per trigger (dp --crosscx).
+    bool dpCrossCx = false;
+    // cfg `dpcrossbehind` (ON since 2026-10-22; 0 is the off arm): a group that has not reached an autonomous trigger sees it as not fired, though the frontier's leader fired it (dp --crossbehind).
+    bool dpCrossBehind = true;
+    // cfg `dpwaveflipcap` (ON since 2026-10-22; 0 is the off arm): a flipped wave under a plain ceiling ramp is the upright wave's outline (dp --waveflipcap).
+    bool dpWaveFlipCap = true;
+    // cfg `dprampseatall` (ON since 2026-10-22; 0 is the off arm): a growing portal's same-tick ramp seat goes through every ramp, at the grown box's lowest point (dp --rampseatall).
+    bool dpRampSeatAll = true;
+    // cfg `dpportalobbmode` (ON since 2026-10-22; 0 is the off arm): GD's own box (obb.txt) also for a turned portal that changes the mode, not the gravity/size ones alone (dp --portalobbmode).
+    bool dpPortalObbMode = true;
+    // cfg `dpslopelagplain` (ON since 2026-10-23; 0 is the off arm): a plain moving ramp's kill reads the line as the previous tick left it (dp --slopelagplain).
+    bool dpSlopeLagPlain = true;
+    // cfg `dpwaveflipcapfloor` (ON since 2026-10-23; 0 is the off arm): a flipped wave on a plain floor ramp has the capped outline (dp --waveflipcapfloor).
+    bool dpWaveFlipCapFloor = true;
+    // cfg `dpwaveflipceilup` (ON since 2026-10-23; 0 is the off arm): a flipped wave under a plain ascending ceiling ramp is killed 1.0 px further out (dp --waveflipceilup).
+    bool dpWaveFlipCeilUp = true;
+    // cfg `dpwaveportalrotmini` (ON since 2026-10-23; 0 is the off arm): the wave-portal step back is for a mini wave only (dp --waveportalrotmini).
+    bool dpWavePortalRotMini = true;
+    // cfg `dpballseatground` (ON since 2026-10-23; 0 is the off arm): an upright ball a slope-law seat landed last tick counts as grounded, so its press taps (dp --ballseatground).
+    bool dpBallSeatGround = true;
+    // cfg `dprobotslopenohover` (ON since 2026-10-23; 0 is the off arm): a robot's jump taken from a live ramp contact arms no hover budget (dp --robotslopenohover).
+    bool dpRobotSlopeNoHover = true;
+    // cfg `dpridesupgrace` (ON since 2026-10-23; 0 is the off arm): the ramp support window of the next tick's press runs one tick's movement past the ramp's far end (dp --ridesupgrace).
+    bool dpRideSupGrace = true;
+    // cfg `dpcrossminlag` (1 since 2026-10-22; was 3, which stuck the official lv22): ticks late below which a crossing under --statecross reads the leader's date (dp --crossminlag). Measured on a long ship/wave level: 1 clears in 349-381 s (16 rounds, no model re-anchor), 2 in 855 s, 3 in 667 s; on the official lv20 1 takes 19 rounds against 10, and on a custom level it stops at two same-tick deaths.
+    long long dpCrossMinLag = 1;
+    // cfg `dpdualbornlinked` (default on since 2026-10-23; --no-dualbornlinked is the off arm): a dual portal of a two-player level gives the new body the inverse gravity and negated vy of the first, as the game does without an Unlink Dual Gravity (dp --dualbornlinked).
+    bool dpDualBornLinked = true;
+    // cfg `dpbirthrung` (OFF): on a two-player level, a death after a dual portal made the second body is first tried again from an anchor 3 ticks after that birth, where the anchor has the
+    // second body and the search is the two-body one (the first body's pass, then the second's against it); a rung of its own, tried once per wall, before the usual back-off.
+    bool dpBirthRung = false;
     // cfg `dpctrlwin`: hand the model GD's recorded control-disabled windows
     // (--ctrlwin, built from the anchor source's ctrlOff rows in addWorldArgs).
     // It landed OFF (43d73db) so that commit could be proven behaviour-preserving;
@@ -607,11 +774,6 @@ struct Config {
     // rotseed: line, marked queue=withheld, and gets no --rotqueue. The A/B arm for
     // whether the queue in the search is what an lv22 run piles up on.
     bool dpRotSeedAnchor = true;
-    // cfg `rotseedpre` (on; 0 = off): level S walks a turn row that consumed nothing once more at
-    // the position before the tick's button (repair.hpp rotseed::seedSim). lv22's glitch-avoid
-    // route teleports its spider on the turn's own tick and the seed was underivable for the whole
-    // run. A walk that turns on the first try never reaches the retry.
-    bool rotSeedPre = true;
     // cfg `dpswingpending`: an anchor taken on the tick a SWING's press takes effect carries
     // the pending flip in --start's 16th field (see swingPendingAt in repair.hpp). On since
     // v0.1.4; always on since the flag clean-up.
@@ -695,13 +857,40 @@ struct Config {
     // cfg `gtrollcheck` (debug, 0 = off): at each grouptrace roll, the bytes the old copy would have
     // written (hashed before the rename) against grouptrace_last.txt after it, one log line each.
     int gtRollCheck = 0;
+    // cfg `gtrestrow` (1 = on, since 2026-10-14): grouptrace writes a row when an object comes to rest where its last row does not
+    // have it, whatever the difference (grouptrace::tick). The kEps gate leaves an ease's settling stretch unwritten.
+    int gtRestRow = 1;
+    // cfg `recenteredfire` (1 = on; off by default): the boxes a kept recording's own attempt entered (dp's
+    // --rectouchentered, repair.hpp touchEnteredRows) also take a box GD fired in that attempt
+    // (touchfire, playerTouchedTrigger) where the rows never meet its load-time box: a box that rides a
+    // moving object. Without it dp read "not entered", so --touchonrec kept the recording's switch and
+    // removed what the box had switched off in the recording's attempt only.
+    // Off because dp's own entry test for the state misses the same boxes: on SubZero 4002 a moving box
+    // that x-crossing Toggles also switch on and off read "not entered" for an attempt GD saw enter it,
+    // and the split this cfg makes possible then turned a platform off under it (6 new divergences).
+    // The recording side alone is right; it waits for the state side.
+    int recEnteredFire = 0;
+    // cfg `gtdeathrow` (1 = on, since 2026-10-14): at a death, write the grouptrace row of the dying tick (g_tick + 1, the
+    // dump's dead row) before the roll, and end the recording there. The per-tick row is written after
+    // ++g_tick, by which time roll() has already committed the attempt, so a dying attempt's recording
+    // stopped one row short of the kill: an instant Move that killed on that tick was in no recording the
+    // model got. SubZero 4001 coin run t=20,674: spikes following group 130 (Follow) jump 744 px down
+    // onto the ship on the dead row, and the model died past them five times; with the rows, none. The rows
+    // are taken before GD's destroyPlayer runs, so what the death itself switches (an On Death trigger's
+    // group) stays out. Ten official and spin-off colds, both arms on one package: equal iterations on
+    // eight, 4001 11 -> 7, and 4001's coin run 20 -> 33 (a later route into a death the model predicts,
+    // t=18,913); no divergence more on any.
+    int gtDeathRow = 1;
+    // cfg `windowguard` (0 = off): hold the game window at its launch size before each level and each
+    // head reset of a driven session (window_guard.hpp). Off in the mod as shipped -- a player's window is
+    // theirs; the verification workers' launcher (py/gdtas/worker.py) turns it on.
+    int windowGuard = 0;
     // cfg `dpinputgrid` (1 = off): pass --inputgrid <n> to the searches, so the button changes only
     // on every n-th tick; repair.hpp baseArgs lifts it again once the loop escalates to a
     // capacity tier or restarts. 2 by default, measured with dpcapladder above.
     int dpInputGrid = 2;
     // `dpminpulse` (0 = off), also the mod setting "human-min-click": pass --minpulse <n> so the
-    // button holds or releases for at least n ticks (240 per second) before it changes again.
-    // That removes the 1-2 tick taps a search may use that no hand could place. Like the grid,
+    // button holds or releases for at least n ticks before it changes again. Like the grid,
     // repair.hpp baseArgs lifts it when the loop escalates, so it can slow a solve but never wall it.
     int dpMinPulse = 0;
     // cfg `dpphaseprof` (print only): time every call into dp (`dpcall:`) and pass --phaseprof to
@@ -718,29 +907,14 @@ struct Config {
     // object's +0x28e byte (the flag checkSpawnObjects tests before it calls triggerObject)
     // on every tick. Empty by default, and then the column reads "-". Print only.
     std::vector<int> dpWatchFired;
-    // cfg `dpspentpad` (on by default since 2026-09-26; `dpspentpad=0` turns it off): pass dp's --spentpad to the anchored
-    // solves and the fixup resims -- the pads GD had latched by t0 in this attempt (padseed,
-    // recorded where GD sets the latch, activatedByPlayer). GD fires a pad once per attempt;
-    // the model's State::usedPad starts empty at an anchor, so a pad fired and stepped off
-    // before t0 comes back live and the anchored model fires it again. On an old custom level,
-    // t=6,960: pad uid 2158 fired at ~6,922, the loop's anchor at 6,944 re-fired it at 6,960
-    // (the kitref replay parts from GD there; with --spentpad 2158 it follows GD to its death).
-    // The pads come from the attempt the anchor row belongs to (anchors::seeds, banked with the
-    // rows), not from the live recorder the next attempt's reset clears.
-    bool dpSpentPad = true;
-    // cfg `dpxtrack` (on by default since 2026-10; 0 = off): pass dp's --xtrack to the anchored
-    // solves and the fixup resims -- GD's x on every tick of the anchor's attempt up to t0
-    // (xtrackArg), so the autonomous triggers behind the anchor are dated by GD's own crossing, not
-    // by distance over one speed. Measured on lv21's t=18,200 section with the reference run's x:
-    // all 248 such triggers land on GD's crossing (+ their delay) where the x estimate is off by
-    // 1,452 ticks on average.
-    bool dpXTrack = true;
-    // cfg `dpfineretry` (on by default since 2026-10; 0 = off): a ladder rung that comes back a
-    // doomed PARTIAL with no cap hit, on a wall GD died at in ship or UFO, is asked once more over a
-    // short window with fine dedupe bins, no input grid and a big cap (repair.hpp runLadder, the fine
-    // retry). The flying modes share the coarse bins (dp keyOf), and a corridor narrower than a bin
-    // merges the state that lives into the one that dies.
-    bool dpFineRetry = true;
+    // cfg `dpmodelreanchor` (default 3; 0 = off; N = at most N re-anchors per ladder): before a plan goes to
+    // the game, its own walk (the search's witness walk) is read, and when the MODEL already dies on it the
+    // loop re-anchors on the model's state a few ticks before that death and searches again, without a game
+    // round (repair.hpp modelReanchor). The state crosses whole, through dp --dumpstate / --start-state
+    // (dp statefile.hpp): a replay of the plan from the call's own anchor writes it, a search takes it up.
+    // Default on since 2026-10-14: one-session colds, off -> 3, moved iterations only down (one coin run
+    // 53 -> 20, the official last level 18 -> 16, two more by 2-4) and left every other level as it was.
+    int dpModelReanchor = 3;
     // (cfg `dpspentorb` is gone: dp --spentorb, the rings this attempt fired before t0, is passed
     // to the anchored solves and the fixup resims always since 2026-09-26. Without it an anchored
     // model re-fires a ring GD spent just before t0 -- an old custom level, six kitref
@@ -825,23 +999,12 @@ struct Config {
     // the search went on to t=8,113, and GD's own plan replayed from the anchor matched GD to its
     // death at 8,362.
     bool portalPayload = true;
-    // cfg `portalpayloadlt` (on by default since 2026-10; 0 = off): the portal payload names the
-    // portals the attempt activated BEFORE t0 (`< t0`, the pads' and rings' convention), not up to
-    // and including it -- the hook's tick is one before the row that shows the activation
-    // (repair.hpp portalPayload).
-    bool portalPayloadLt = true;
-    // cfg `dpanchorrotstep` (on by default since 2026-10; 0 = off): the anchor also writes
-    // --start's 28th-30th fields -- flipT and armT as "not said" (-1) and the size of the spin the
-    // angle just made -- which dp reads as a ball's stake (State::rotStep). Without it every
-    // anchored ball starts with no stake and does not turn in the air until something stakes it
-    // (repair.hpp startArg).
-    bool dpAnchorRotStep = true;
-    // cfg `dpanchorrot2` (on by default since 2026-10; 0 = off): in a dual the anchor also writes
-    // --start's 31st-33rd fields -- the second body's sprite angle, the sign and the size of the
-    // step it just made -- which dp --rot2 seeds State::rot2 / rotNeg2 / rotStep2 from. Writes the
-    // 28th-30th too (as dpanchorrotstep would; 0 for the 30th when that is off) so the positions
-    // line up.
-    bool dpAnchorRot2 = true;
+    // cfg `anchorframe2dir` (on by default; 0 = off): an anchor in GD's frame 2 takes --start's rev
+    // (22nd field) from the way the player is going, as the other frames already do, instead of 1
+    // outright (repair.hpp startArg). GD frame 2 is the model's frame 0 reversed only while the player
+    // runs back along x; a 2900 that also reverses the player (a custom level, gframe 2 with x
+    // climbing 1.95 a tick) is the model's frame 0 going forward.
+    bool anchorFrame2Dir = true;
     // Carry GD's slope-ride state into an anchored solve (cfg `histride=1`). The hist
     // payload becomes version 4 -- version 3's values plus the ride's raw facts:
     // slopeOn (+0x9b0), slopeUnder (+0x9b8), slopeUid (the ramp at +0x678), slopeAge
@@ -888,15 +1051,6 @@ struct Config {
     // screen-on snap keeps depending on the render cadence.
     bool snapNodeSync = true;
     bool snapNodeLog = false;   // cfg snapnodelog=1: print a snap whose object's node is off its real position
-    // cfg singlereset (ON by default since 2026-10-07; singlereset=0 is the off arm): a reset that arrives when no physics has run since the layer's last
-    // reset does not rebuild the level again (the mod's own bookkeeping still runs). GD's death handler
-    // resets the level and the mod's next flight resets it again in the same frame, so one attempt cost two
-    // resets: a persistent item counted twice (Item Edit on a kept item), and a start trigger (x <= 0:
-    // Item Compare, Toggle) did not fire on the second one -- its group went back to its saved state and
-    // a custom level's start spike killed at t=1 on every flight (hooks_playlayer, resetLevel). A head reset
-    // also starts with the spawn bookkeeping cleared (m_spawnTuples, m_spawnTriggerActions): one that
-    // follows a checkpoint flight inherited the flight's, and the reset did not clear it.
-    bool singleReset = true;
     // cfg resetlog (off; 1 = on): one result.txt line per PlayLayer::resetLevel, before and after the engine's
     // reset: the attempt, what kind of reset it was, the persistent item table and each of its items' live
     // value, the spawn bookkeeping (m_spawnTuples, m_spawnTriggerActions), and how many objects have their
@@ -909,14 +1063,6 @@ struct Config {
     // inherits before its first tick, for diffing two histories by name.
     bool resetDump = false;
     std::vector<int> resetDumpUids;
-    // cfg headbandfresh (on by default since 2026-10; 0 = off): a head reset sets the band top
-    // checkCollisions kept from its last pass (layer+0x764, m_gameState+0x5bc) to a fresh layer's 0. checkCollisions takes getMaxPortalY() minus it
-    // (0x213c4f) and treats the band as moved when that is not 0, so a fresh attempt's first pass sees the band
-    // move. resetLevel leaves the last attempt's value: on a custom level whose ship starts on its band floor, an
-    // attempt after a flight cut inside the start's band (390) holds the ship at vy 0 on t=2 where a fresh
-    // attempt, or one after a death in another band (570), keeps -0.069 -- the same inputs part from there.
-    // The dp flag --headbandfresh is the model's side of the same first pass.
-    bool headBandFresh = true;
     // cfg persistworld=k (off = -1): every head reset starts from one fixed table of kept items. An
     // Item Persistence trigger (3641) writes an item's value into GJEffectManager's kept table
     // (m_persistentItemCountMap, +0x370; timers in m_persistentTimerItemSet, +0x3b0) when it fires
@@ -939,6 +1085,12 @@ struct Config {
     // and the loop's deepest-first takes that as progress until a catch at the end of the stretch
     // kills it.
     bool voidBand = true;
+    // cfg voidcredit (default off): a closed void run that also wedges credits the tick it began as the depth to beat (repair.hpp,
+    // voidCredit): GD flew the plan alive to there, and a wedge never ranks, so without it the loop rewinds past that ground.
+    bool voidCredit = true;   // on by default (release flags, 2026-10-17); cfg voidcredit=0 is the off arm
+    // cfg stallbound (default off): the 40,000-tick "an attempt that never ends" bound grows to the level's length at the slowest speed
+    // (hooks_gamelayer.cpp). One custom level runs ~52,000 ticks, and every plan alive at 40,000 was put down as a death.
+    bool stallBound = true;   // on by default (release flags, 2026-10-17); cfg stallbound=0 is the off arm
     // cfg recprovchain (default off): --recprov names one attempt for the recording and the anchor's
     // rows also when they are two attempts whose worlds agree up to a tick -- a checkpoint flight
     // carries the world of the attempt that took the checkpoint up to its tick (repair.hpp,
@@ -982,10 +1134,10 @@ struct Config {
     // exist at load time)
     bool standTrace = false;    // cfg standtrace=1
     bool noDeath = false;       // swallow deaths (cfg nodeath=1, observation only)
-    // cfg `anticheatpass` (on; 0 = off): where a death is swallowed (nodeath, the section search's
-    // no-kill), GD's anti-cheat spike still clears GD's check, as GD's own destroyPlayer does
-    // (hooks_playlayer.cpp). Off, the spike is hit on every substep and postCollision never runs.
-    bool antiCheatPass = true;
+    // cfg nodeath as given: 0 none, 1 both bodies (noDeath), 2 only player 1's deaths are swallowed, 3 only player 2's (observation: the other body
+    // dies as usual, so a two-player level says which body can walk its side of the level with no input). With 1, 2 or 3 in a replay session each
+    // swallowed call writes its `killer:` line (who=p1/p2, where), which is the detection of where an idle body would die.
+    int noDeathCode = 0;
     // Rollback verification (method B: practice-mode checkpoints)
     int practiceAt = -1;     // turn practice mode ON at this tick
     int checkpointAt = -1;   // create a checkpoint at this tick
@@ -1002,10 +1154,6 @@ struct Config {
     // acceptance that a section's entry is faithful, and it doubles as the
     // regression detector for five known holes.
     int snapVerify = 0;
-    // cfg `snapplayer=0` (on by default): the restore of an entry snapshot writes back the
-    // player as the pass had it when the snapshot was taken, as the section search does at its
-    // head (secsolve::g_cpPlayer). Off restores with the checkpoint alone.
-    bool snapPlayer = true;
     // cfg `cpflight=S` (600 by default since 2026-10; 0 = off): the loop's flights take a checkpoint
     // every S ticks, and a plan whose inputs agree with an earlier attempt's up to one of them flies
     // from it instead of from tick 0 (mod/cp_flight.hpp).
@@ -1014,6 +1162,43 @@ struct Config {
     // is flown again from its own latest checkpoint while the solve runs and compared with the head
     // flight (`cpflight: probe` lines). Print only.
     bool cpFlightProbe = false;
+    // cfg `cpflightprobecarry=1` (with cpflightprobe=1; print only): a probe is flown and compared with
+    // its control also when what the control inherits is not what the checkpoint's attempt inherited --
+    // the case the carry gate flies from the head. The verdict line names the parts that differ and
+    // whether the first difference comes before the checkpoint (the inheritance changed the head
+    // flight's own way to it) or after it (something the restore leaves as the inheritance has it);
+    // the session line counts the verdicts by part.
+    bool cpFlightProbeCarry = false;
+    // cfg `cpflightgaps=1` (with cpflight=S; print only): the state a checkpoint restore is not known to
+    // bring back -- the disabled (broken) objects, the persistent item counts, the players' rotate-object,
+    // follow-float and touching-ring containers, the layer's non-effect list -- fingerprinted at each
+    // take and again right after each restore (`cpflight: gaps` lines; cp_flight.hpp GapSig).
+    bool cpFlightGaps = false;
+    // cfg `cpdisabled` (on by default since 2026-10-14; 0 = off): after a checkpoint restore of the loop,
+    // every object's two disabled flags (m_isDisabled / m_isDisabled2 -- a broken breakable block) are put
+    // back as they were when the checkpoint was taken; the checkpoint does not save them.
+    bool cpDisabled = true;
+    // cfg `cpfollowfloats` (on by default since 2026-10-14; 0 = off): each player's m_playerFollowFloats
+    // is saved with a checkpoint of the loop and put back after its restore; the checkpoint does not
+    // save it.
+    bool cpFollowFloats = true;
+    // cfg `cprotnode` (on by default since 2026-10-14; 0 = off): the node rotation of every object a
+    // trigger has rotated is saved with a checkpoint of the loop and put back after its restore, which
+    // otherwise sets it from the object's start rotation plus its offset (cp_flight.hpp captureRotNodes).
+    bool cpRotNode = true;
+    // cfg `cppersistguard` (on by default since 2026-10-14; 0 = off): while the level's Item Persistence
+    // table holds anything (and cfg attemptone is off), the loop's plans fly from the head, not from a
+    // checkpoint: GD keeps that table across attempts and a checkpoint does not rewind it (cp_flight.hpp
+    // requestStart).
+    bool cpPersistGuard = true;
+    // cfg `cpcarryparts=<mask>` (2 by default since 2026-10-18, 3 before it, 31 = every part, as before): the parts of
+    // what an attempt inherits that turn a checkpoint flight down when they differ from the checkpoint
+    // attempt's -- 1 band, 2 rect latch, 4 area list, 8 players' snap, 16 stale nodes. 2 keeps the latch only: a band
+    // that differs does not turn a checkpoint flight down (a long custom level: all 20 refusals of a run were the band, and
+    // letting them fly cut the flights from 159 s to 38 s with the same solution). cpcarryparts=3 is the arm with the band.
+    // The nodes part stays in force whatever the mask unless cfg snapnodesync is on and the
+    // screen is off (cp_flight.hpp gateMask).
+    int cpCarryParts = 2;
     // cfg `cpactivation` (off by default): a checkpoint restore of the loop, the takeover and the seek
     // bar puts every object's activation and the layer's active list back as the flight had them
     // (cp_flight.hpp, AreaState).
@@ -1024,6 +1209,9 @@ struct Config {
     // cfg `cpflightobj=<uid>` (print only): that object's area offsets, stamp and rect around each
     // checkpoint and restore of cfg cpflight (`cpflight: obj` lines).
     int cpFlightObj = -1;
+    // cfg `cpflightobjfrom=<t0>` / `cpflightobjto=<t1>` (with cpflightobj; print only): that object's
+    // line after every update call whose tick is in [t0, t1], in every flight (`cpflight: obj tick att=N`).
+    int cpFlightObjFrom = -1, cpFlightObjTo = -1;
     // cfg `cpflightprobeat=<tick>` (with cpflightprobe): probe from the latest checkpoint at or before
     // that tick, so every death past it flies the same stretch again. -1 = the latest before the death.
     int cpFlightProbeAt = -1;
@@ -1112,11 +1300,14 @@ struct Config {
     // credited is ended there (hooks_gamelayer.cpp), the same verdict the search's miss prune
     // gives. Implies coinMode: GD's own pickup (the pickupItem hook) is what it reads.
     bool coinRoute = false;
-    // cfg `worldgates=1` (a measurement, default off): the level's item gates (Count, Tap, Item
+    // cfg `worldgates` (default on, worldgates=0 is the off arm): the level's item gates (Count, Tap, Item
     // Compare and the pickups that feed them) are part of the model's world without coinroute too
     // (dp --worldgates): the searches and the fixup replay get --worldgates and items.txt, and the
     // anchors carry GD's item counters (--itembase). The coins themselves stay coinroute's.
-    bool worldGates = false;
+    // On since a custom level's spider pad is switched on by a Count fed by two pickups (dp --countactgrp): off,
+    // the model only had the recording's pad, and no cold run took both pickups. Six gated levels A/B
+    // (900 s, secsolve off) cleared the same two either way.
+    bool worldGates = true;
     // cfg `coinwatch=1`: repeat the `coinlive:` line every 1,200 ticks. For the
     // question "when does this coin's collision rect move", which the once-per
     // -coin default cannot answer.
@@ -1138,6 +1329,11 @@ struct Config {
     long long takeoverAt = -1;
     float takeoverX = 0.f;
     double takeoverWait = 1.0;
+    // cfg `takeoverkey=1` (off by default): no point is fixed ahead. The plan plays as an ordinary
+    // replay, and the takeover end key (setting key-takeover-end, F8) hands the input over where the
+    // replay stands -- the strict checkpoint is put there and the mode begins as it does at a fixed
+    // point. The same key then ends it, as before.
+    bool takeoverKey = false;
     std::vector<InputCmd> inputs;
     std::vector<ToggleCmd> toggles; // for verification D: switch mode at the given tick (calls
                                     // the same function a portal does)
@@ -1191,6 +1387,12 @@ inline int current() { return g_at < g_levels.size() ? g_levels[g_at] : 0; }
 inline std::string g_levelDir;
 inline bool g_levelDirChecked = false;
 
+// cfg `suiteplans=<dir>` (default empty = off): each suite level plays the plan `<dir>/solution_lv<ID>_dp.txt` (a plan file, as `planfile=` takes it), put into
+// g_cfg.inputs after the cfg is read for that level. The cfg is read again for every level of a suite and holds one plan at most, so a suite that replays (solve=0) needs
+// the plan of each level named by its ID; this is how cold_regress --fresh-verify-one-session plays the saved solutions of all its levels in one game. A level with no such
+// file plays no input and says so in result.txt. Kept here, not in Config, for the same reason as g_levels.
+inline std::string g_planDir;
+
 }  // namespace suite
 // On the session's first resetLevel, turn practice mode OFF and wipe all checkpoints. If the
 // leftovers of the previous session (practice ON + a checkpoint near the end) carry over, the
@@ -1219,6 +1421,49 @@ inline bool botDriving() { return g_started; }
 // still not recorded even though every hook correctly passed it through.
 inline bool progressBlockActive() { return botDriving() && g_cfg.progressBlock; }
 
+// Whether this build carries the test instruments below (CMake GDSOLVER_TEST_INSTRUMENTS, OFF unless a measurement asks): in any other build their
+// cfg keys are read and ignored, with a line in the log (testInstrument in session.hpp), so a release cannot be told to drop a player's requests.
+#ifdef GDSOLVER_TEST_INSTRUMENTS
+inline constexpr bool kTestInstruments = true;
+#else
+inline constexpr bool kTestInstruments = false;
+#endif
+// TEST ONLY. cfg `netcatch_testonly` (autorun.cfg, no session needed), for the network layer's positive
+// control: a person plays, the game builds its death-data upload, and the request is seen at
+// CCHttpClient::send and dropped there, so nothing reaches a server.
+//   1          refuse and name EVERY request the process makes, whoever asked (a player's too)
+//   deathdata  refuse and name only the death-data upload (uploadGJDeathData); everything else passes,
+//              so a test account can still log in and the game otherwise behaves as it does
+// Never on outside a measurement: process-wide on purpose (not in g_cfg, which a session resets), off
+// unless that file says so (no UI sets it, no default turns it on), and every request it refuses is
+// named in the log.
+inline int g_netCatchTestOnly = 0;   // 0 off, 1 everything, 2 the death-data upload only
+// TEST ONLY. cfg `nettrace_testonly=1`: name every request that goes out and what comes back (method, host, path, sizes, the HTTP code, a bare
+// numeric answer; never a query, a body or an answer's text). Process-wide, off unless autorun.cfg says so. See nettrace in record_gate.hpp.
+inline bool g_netTraceTestOnly = false;
+// TEST ONLY. cfg `deathtest_testonly=1`: flag the level being entered for 2.209's death-data upload (see deathtest in record_gate.hpp). Only ever with
+// netcatch_testonly=1, on a throwaway profile.
+inline bool g_deathTestTestOnly = false;
+// TEST ONLY. cfg `heapphase_testonly=<n>` (n >= 1): validate every heap at each change of the section search's step, at most once every n-1 ms (postmortem.hpp
+// heapPhaseCheck). 0 = off.
+inline int g_heapPhaseTestOnly = 0;
+// TEST ONLY. cfg `phasefile_testonly=1`: the section search's step written over one line of <data>/secphase.txt at every change (postmortem.hpp phaseFileWrite).
+inline bool g_phaseFileTestOnly = false;
+// The two gates below the function-level one (record_gate.hpp, hooks_record_gate.cpp): what leaves
+// the process and what reaches the disk. Not the same question as progressBlockActive: that one
+// asks whether the level's record is held back, these ask whether GD may talk to a server or
+// write a save file at all while the mod drives.
+inline bool netBlockActive() { return g_netCatchTestOnly == 1 || (botDriving() && g_cfg.netBlock); }
+// True while a driven session's level is being left (PlayLayer::onQuit). The session has already
+// been torn down by then -- g_started is false and g_cfg is back to its defaults -- but GD's own
+// leave-the-level code still runs, and it is the one that writes the platformer save.
+inline bool g_quitDriving = false;
+// ...and the same for the level's record: set across the leave of a driven level, so that what GD commits
+// to the record while leaving (the play time) is undone too (hooks_playlayer.cpp, commitPlayTime209).
+inline bool g_quitProgress = false;
+inline bool timeBlockActive() { return progressBlockActive() || g_quitProgress; }
+// saveBlockActive() is below, after g_sessionOver.
+
 // Number of blocked achievements / statistics / coins (logged at every session end to make the
 // feature visible)
 inline long long g_blockedAch = 0, g_blockedStat = 0, g_blockedCoin = 0;
@@ -1227,6 +1472,13 @@ inline long long g_blockedAch = 0, g_blockedStat = 0, g_blockedCoin = 0;
 // from the statistics counter because these are the paths that write the LEVEL's own record --
 // the progress bar percentage, the attempt count, orbs, diamonds, the completion flag.
 inline long long g_blockedProgress = 0;
+// Requests GD handed to its HTTP client while the mod drove, and save-file writes it asked for.
+// Both are refused (see hooks_record_gate.cpp) and both are counted: the session-end line says
+// how many, so "nothing left the process" is a number and not an argument.
+inline long long g_blockedSend = 0, g_blockedSave = 0;
+// 2.209's per-reset death-data rollover that was not let through while driving (hooks_system.cpp). Not a blocked
+// recording path -- the player's data being filed away, at the bot's time -- so it is counted on its own.
+inline long long g_rolloverSkipped = 0;
 
 // The level's own counters, sampled when the session opens and again when it ends. GD keeps
 // them on GJGameLevel and they persist into the save, so "did this session record anything"
@@ -1325,6 +1577,14 @@ inline long long g_frame = 0;
 inline int g_traceLines = 0;
 inline int g_finishedAttempts = 0;
 inline bool g_sessionOver = false;
+// Saves are refused while a session is RUNNING, not for as long as botDriving() holds. That one stays
+// true until the level is left, and a save in that stretch -- the player closing the game over a
+// finished solve's results screen -- is the player's own: the memory it writes was audited at the
+// session's end (memaudit), and refusing it would drop whatever else they changed since the last
+// save. The record the bot made outside the audit's sight (the platformer save) is covered by
+// g_quitDriving, which holds across the leave that writes it.
+inline bool sessionRunning() { return g_started && !g_sessionOver; }
+inline bool saveBlockActive() { return (sessionRunning() || g_quitDriving) && g_cfg.saveBlock; }
 inline size_t g_nextToggle = 0;
 inline bool g_injecting = false;
 // The jump button as GD was last told, tracked in the handleButton hook. This is
@@ -1340,8 +1600,13 @@ inline std::chrono::steady_clock::time_point g_attemptStart;
 // has the input the session stays open, so botDriving() -- and every block hung on it -- holds.
 namespace cpflight { struct Rec; }
 namespace takeover {
-inline bool armed() { return g_cfg.takeoverAt >= 0 || g_cfg.takeoverX > 0.f; }
+inline bool armed() { return g_cfg.takeoverAt >= 0 || g_cfg.takeoverX > 0.f || g_cfg.takeoverKey; }
+// Armed by the key alone (cfg takeoverkey): no tick or x to fly to. Until the key is pressed the
+// session is an ordinary replay.
+inline bool keyOnly() { return g_cfg.takeoverKey && g_cfg.takeoverAt < 0 && g_cfg.takeoverX <= 0.f; }
 inline bool g_live = false;            // a person has the input (from the take to the mode's end)
+inline bool g_takeNow = false;         // the key was pressed: the start point is here, at the next
+                                       // update boundary
 inline bool g_done = false;            // the mode has ended in this session (it does not re-arm)
 inline bool g_restoring = false;       // the reset that loads the checkpoint is running
 inline bool g_restorePending = false;  // a reset GD asked for, to be a restore at the frame boundary
@@ -1383,6 +1648,11 @@ inline const void* g_pendingSrc = nullptr;   // the game's pending checkpoint g_
 inline bool g_commitPending = false;         // ...which the game has just stored
 inline long long g_T = -1;             // the start point's tick
 inline std::vector<InputCmd> g_human;  // this attempt's own presses (jump, player 1)
+// The plan as it was before the start point cut it (g_cfg.inputs / toggles are the checkpoint's
+// from then on): the replay key puts it back when it leaves the mode in a session armed by the
+// key alone, so the replay plays whole again and the takeover key can be pressed anew.
+inline std::vector<InputCmd> g_fullInputs;
+inline std::vector<ToggleCmd> g_fullToggles;
 inline int g_other = 0;                // presses the plan format cannot carry (other buttons, 2P)
 inline int g_attemptNo = 0;            // the mode's attempts: 1 is the one that took the checkpoint
 inline int g_deaths = 0, g_restores = 0, g_missed = 0;
@@ -1393,13 +1663,16 @@ inline std::string g_endWhy;           // why the mode ended (the HUD says so)
 inline bool approaching() { return armed() && !g_live && !g_done && g_started && !g_sessionOver; }
 // A person, not the plan, is pressing now (the input block is lifted for them).
 inline bool personDriving() { return g_live && g_started && !g_sessionOver; }
+// The mode owns the level: F7 and the seek and speed keys would restart or run it under the person.
+// A key-armed session that has not been taken over yet is an ordinary replay and keeps them.
+inline bool ownsLevel() { return armed() && !(keyOnly() && !g_live && !g_done); }
 // GD asked for a reset while a person plays: it becomes a restore of the checkpoint.
 inline bool takesReset() { return g_live && !g_restoring && g_started && !g_sessionOver; }
 // The batch of update calls stops here: the checkpoint has just been taken or loaded, and the
 // person's run starts after the stop, at the next frame.
 inline bool stopsBatch() { return g_live && g_waiting; }
 inline void resetState() {
-    g_live = g_done = g_restoring = g_restorePending = g_waiting = g_cpWanted = false;
+    g_live = g_done = g_restoring = g_restorePending = g_waiting = g_cpWanted = g_takeNow = false;
     g_T = -1;
     g_cps.clear();
     g_pending = Cp{};
@@ -1415,6 +1688,9 @@ inline void resetState() {
 }
 // Defined in mod/takeover.hpp (the key is polled in session_hotkeys.hpp, ahead of it).
 inline void endByKey();
+inline void keyPressed();
+inline void takeNow(const char* by);
+inline bool resetByReplayKey();
 }  // namespace takeover
 
 // Live commands (data/cmd.txt): pause / resume / step N
@@ -1485,11 +1761,11 @@ inline bool g_hudOn = true;
 // to be one cycling key.
 inline bool g_renderOff = false;
 // F1: the overlays are hidden. This NEVER hides the bot badge (spec §9 requires a replay to be
-// visibly a replay), and the key is ignored while solving.
+// visibly a replay), and the key does not hide them while solving (showing them always works).
 inline bool g_overlayHidden = false;
 // "Solving" as opposed to "replaying": the mod is being driven as a solver worker (serve mode is
 // what the DP driver opens), or it is solving the level in-process (cfg `dpsolve` / the panel's
-// Solve mode). The overlay toggle is refused here.
+// Solve mode). Hiding the overlays is refused here.
 inline bool solvingNow();
 // Spectating speed. Left/right arrows (or up/down) step one notch; F8 toggles between FAST and
 // realtime + cycles through 1x and above. Physics stays fixed at 1/240 and only "how many
@@ -1520,6 +1796,28 @@ inline void watchSpeedSet(int idx) {
 // (py/watch_plan_replay.py, py/start_manual_worker.py), and a mid-play speed change belongs on
 // the spectating notch (the arrow keys), which does not touch dt at all.
 inline float g_slowmo = 1.f;
+// cfg `vtime=<seconds>` (hooks_vtime.cpp): while the mod drives, the scheduler is handed this fixed dt and the
+// action manager is advanced by it once per update call, so a cocos action reads the same on any frame shape.
+// Not given (-1, the default): the fast loop's own dt (cfg fastdt) while the fast loop is what runs and nowhere else
+// (vtimeNow, fxcensus.hpp), so a replay at the screen's rate keeps the screen's dt. 0 = off. A cube's rotation on the
+// tick it starts to fall moved with the frame's wall time and with fastloops, and a plan the fast loop cleared died
+// at t=924 at one update a frame (a custom level): a solution found without it did not clear when it was replayed.
+inline float g_vtime = -1.f;
+inline bool g_camRand = true;   // cfg `camrand=0` (off): the camera shake's rand() is seeded from the tick (hooks_vtime.cpp)
+// cfg `vtscale=0` (off; on by default): the fast loop's per-call action update (hooks_gamelayer.cpp) is scaled by the scheduler's time scale
+// (GD's TimeWarp), as the scheduler's own update of a 1x frame is. Without it a cocos action reads 1/60 per call where 1x reads 1/60 x the warp
+// (a custom level, a dash sprite's rotation at the end of a dash: 96 degrees in the fast loop, 136 in a 1x replay).
+inline bool g_vtScale = true;
+// cfg `stopfollowers=0` (off; on by default): as a PlayLayer leaves its scene the sprites that follow its objects stop their actions (PlayLayer::onExit,
+// stopFollowerActions in helpers_game.hpp).
+inline bool g_stopFollowers = true;
+// cfg `replaystep=<n>` (0 = off): while the bot drives a replay at the screen's speed (not the fast loop, not a solve), the game is advanced in fixed
+// steps of 1/n s taken from the time the frames bring (replaystep.hpp), n = 60 for the 1/60 s update the solver's fast loop uses.
+inline int g_replayStep = 0;
+inline float g_replayStepDiagDt = 0.f;   // cfg `replaystepdt=<seconds>` (diagnostic, 0 = off): the frame time replaystep.hpp is fed in place of the real one
+inline int g_replayStepCfg = -1;   // the value cfg `replaystep` gave (-1: not given); the play menu's Options choice is used when it was not
+inline long long g_nodeDbg0 = 0, g_nodeDbg1 = -1;   // cfg `nodedbg=t0,t1` (print only, hooks_player.cpp): the node at PlayerObject+0x740 each tick
+inline long long g_rotDbg0 = 0, g_rotDbg1 = -1;   // cfg `rotdbg=t0,t1` (print only, hooks_vtime.cpp)
 // Force a recompute of the visible sections right after returning from render skip (old method,
 // only with visrefresh=1). While skipping, the visible-section bounds are not updated, so
 // objects are not drawn after returning
@@ -1663,7 +1961,13 @@ inline bool g_attemptOne = false;
 // custom level the copy's flights read a later attempt and lived, and the level's first flight read 0 and died on
 // tick 1 to a spike the compare switches. k=1 is the world a judge with prelude 1 replays in. attemptone wins.
 inline long long g_attemptCount = -1;
-inline long long g_attemptReadsPinned = 0;     // attempt-count reads answered as on attempt 1 (or as k)
+// cfg `attemptauto` (1 = on, the default): a level the scan finds attempt-dependent (levelwarn::kAttemptDependent:
+// an Item Compare / Edit reading the attempt count, or Item Persistence, whose triggers reach play) is driven as if
+// `attemptcount=1` were set, with no cfg line for it. Decided at every level entry (enterConfiguredLevel), so one
+// level's pin cannot reach the next. An explicit attemptone or attemptcount wins. Off: -1, the game's own count.
+inline bool g_attemptAuto = true;
+inline long long g_attemptAutoCount = -1;      // the pin the level entry chose (-1: none)
+inline long long g_attemptReadsPinned = 0;    // attempt-count reads answered as on attempt 1 (or as k)
 inline long long g_attemptReadsSeen = 0;       // attempt-count reads this session (first 20 printed)
 inline long long g_persistTransfersSkipped = 0;   // kept-item copies not made
 inline bool attemptPinActive() { return botDriving() && g_attemptOne; }

@@ -59,11 +59,20 @@ namespace cpflight {
 // offset, position, angle, the step and edge values it moves by, the shake, and the state's other
 // scalars, named one by one so none of its containers is touched -- and the nodes it has placed.
 struct CamMem { size_t off, size; };
+// Two of the state's camera points are named m_cameraDeltaPosition / m_cameraLastPosition in the newer bindings and m_unkPoint4 / m_cameraPosition2 in the older ones.
+template <class G> inline CamMem cameraDeltaPoint() {
+    if constexpr (requires { &G::m_cameraDeltaPosition; }) return CamMem{offsetof(G, m_cameraDeltaPosition), sizeof(G::m_cameraDeltaPosition)};
+    else return CamMem{offsetof(G, m_unkPoint4), sizeof(G::m_unkPoint4)};
+}
+template <class G> inline CamMem cameraLastPoint() {
+    if constexpr (requires { &G::m_cameraLastPosition; }) return CamMem{offsetof(G, m_cameraLastPosition), sizeof(G::m_cameraLastPosition)};
+    else return CamMem{offsetof(G, m_cameraPosition2), sizeof(G::m_cameraPosition2)};
+}
 inline const std::vector<CamMem>& gameStateScalars() {
 #define CPF_GS(m) CamMem{offsetof(GJGameState, m), sizeof(GJGameState::m)}
     static const std::vector<CamMem> v = {
         CPF_GS(m_cameraZoom), CPF_GS(m_targetCameraZoom), CPF_GS(m_cameraOffset),
-        CPF_GS(m_unkPoint1), CPF_GS(m_unkPoint2), CPF_GS(m_unkPoint3), CPF_GS(m_unkPoint4),
+        CPF_GS(m_unkPoint1), CPF_GS(m_unkPoint2), CPF_GS(m_unkPoint3), cameraDeltaPoint<GJGameState>(),
         CPF_GS(m_unkPoint5), CPF_GS(m_unkPoint6), CPF_GS(m_unkPoint7), CPF_GS(m_unkPoint8),
         CPF_GS(m_unkPoint9), CPF_GS(m_unkPoint10), CPF_GS(m_unkPoint11), CPF_GS(m_unkPoint12),
         CPF_GS(m_unkPoint13), CPF_GS(m_unkPoint14), CPF_GS(m_unkPoint15), CPF_GS(m_unkPoint16),
@@ -92,7 +101,7 @@ inline const std::vector<CamMem>& gameStateScalars() {
         CPF_GS(m_cameraEdgeValue1), CPF_GS(m_cameraEdgeValue2), CPF_GS(m_cameraEdgeValue3),
         CPF_GS(m_unkUint10), CPF_GS(m_unkUint11), CPF_GS(m_unkUint12), CPF_GS(m_cameraStepDiff),
         CPF_GS(m_unkFloat10), CPF_GS(m_timeModRelated), CPF_GS(m_timeModRelated2),
-        CPF_GS(m_unkUint13), CPF_GS(m_unkPoint32), CPF_GS(m_cameraPosition2), CPF_GS(m_unkBool20),
+        CPF_GS(m_unkUint13), CPF_GS(m_unkPoint32), cameraLastPoint<GJGameState>(), CPF_GS(m_unkBool20),
         CPF_GS(m_unkBool21), CPF_GS(m_unkBool22), CPF_GS(m_unkUint14), CPF_GS(m_unkBool26),
         CPF_GS(m_cameraShakeEnabled), CPF_GS(m_cameraShakeDuration), CPF_GS(m_cameraShakeStrength),
         CPF_GS(m_cameraShakeInterval), CPF_GS(m_lastShakeTime), CPF_GS(m_unkPoint34),
@@ -106,7 +115,7 @@ inline const std::vector<CamMem>& gameStateScalars() {
 }
 
 // ...and the layer's own: its camera scalars, its clocks, and what resetLevel re-arms -- found with cfg
-// cpflightlayerdiff on MOAI, where a restore that had everything above still let the camera part from
+// cpflightlayerdiff on a custom level, where a restore that had everything above still let the camera part from
 // the flight 10 ticks later (t=4,811) and the band with it. m_resumeTimer is left at 2 by resetLevel,
 // which freezes what runs on the modified delta for two updates; the clocks (m_currentStep,
 // m_timePlayed, m_tickIndex, m_clickIndex, m_timestamp, m_songTriggerInterval, the attempt's time)
@@ -131,7 +140,7 @@ struct Camera {
     std::vector<uint8_t> gs;                    // gameStateScalars(), in order
     std::vector<uint8_t> layer;                 // layerScalars(), in order
     // GJGameState containers a restore left one element longer than the flight had them (the layer
-    // diff on MOAI: the tween actions, where the camera's zoom and offset run, 3 -> 4, and the two
+    // diff on a custom level: the tween actions, where the camera's zoom and offset run, 3 -> 4, and the two
     // event maps 50 -> 51)
     decltype(GJGameState::m_tweenActions) tweens;
     decltype(GJGameState::m_unkMapPairGJGameEventIntVectorEventTriggerInstance) events;
@@ -252,7 +261,7 @@ struct StaleNode {
 // a transform or rotate action and cleared only when an object is added to a layer, so it is whatever
 // the last attempt of the layer left -- not what the attempt that took the checkpoint had at T. With it
 // set the rect comes from the oriented box's corners in world floats, 1 ulp off the plain one (see
-// notes/rect-latch-0x2e8). Measured on MOAI: a probe from t=10,200 whose head flight was the first of
+// notes/rect-latch-0x2e8). Measured on a custom level: a probe from t=10,200 whose head flight was the first of
 // its layer to pass the Scale trigger at t~10,700 started with the latch the head flight had set there,
 // and its y parted from the head's at t=10,460.
 // An object whose class derives from EnhancedGameObject (the class types GD gives triggers, animated and
@@ -422,6 +431,33 @@ struct GtState {
     float cx = 0, cy = 0, w = 0, h = 0, rot = 0;
     int on = -1, env = 0;
     bool emitted = false;
+    // cfg gtrestrow: the previous tick's values, or the first rest after a restore is seen a tick late
+    float pcx = 0, pcy = 0, pw = 0, ph = 0, prot = 0;
+    bool pvalid = false;
+};
+
+// cfg cpflightgaps=1 (print only): state a checkpoint restore is not known to bring back, fingerprinted
+// when the checkpoint is taken and again right after a restore of it (cpStart), so a run says whether
+// each one ever comes back different:
+//   - the disabled objects (GameObject m_isDisabled / m_isDisabled2: a breakable block the player
+//     broke), which the checkpoint does not save, so the restore's reset may bring them back;
+//   - the persistent item counts (GJEffectManager m_persistentItemCountMap), which GD keeps across
+//     attempts on purpose and a checkpoint does not rewind;
+//   - each player's m_rotateObjectsRelated, m_playerFollowFloats and m_touchingRings, containers the
+//     player's byte copy (psnap) cannot carry and psnap::restoreTouch does not;
+//   - the layer's m_calcNonEffectObjects with its count.
+// Order-independent hashes for the unordered maps.
+struct GapSig {
+    bool have = false;
+    int disabled = 0;
+    uint64_t disabledHash = 0, persist = 0, calc = 0;
+    size_t persistN = 0;
+    int calcN = 0;
+    uint64_t rot[2] = {0, 0}, follow[2] = {0, 0}, touching[2] = {0, 0};
+    size_t rotN[2] = {0, 0}, followN[2] = {0, 0}, touchingN[2] = {0, 0};
+    // the disabled objects themselves (uid order), to say which ones a restore changed
+    struct Dis { GameObject* obj; int uid; int id; uint8_t flags; };
+    std::vector<Dis> dis;
 };
 
 // One checkpoint and what it does not carry.
@@ -477,6 +513,14 @@ struct Rec {
     // previous attempt's entries read as stale against the stamps the restore puts back
     std::unordered_map<GameObject*, areaenv::Entry> envEntries;
     std::unordered_map<GameObject*, areaenv::Shape> envShapes;
+    GapSig gaps;   // cfg cpflightgaps / cpdisabled
+    // cfg cpfollowfloats: each player's m_playerFollowFloats at the take
+    std::vector<float> followFloats[2];
+    bool haveFollow = false;
+    // cfg cprotnode: the node rotation of every object a trigger has rotated, at the take
+    struct RotNode { GameObject* obj; float rx, ry; };
+    std::vector<RotNode> rotNodes;
+    bool haveRotNodes = false;
     Rec() = default;
     Rec(const Rec&) = delete;
     Rec& operator=(const Rec&) = delete;
@@ -648,6 +692,191 @@ inline CarrySig carrySig(GJBaseGameLayer* l) {
     return s;
 }
 
+// cfg cpflightgaps: the fingerprint (GapSig) of a layer now.
+inline uint64_t mix64(uint64_t h) {
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33;
+    return h;
+}
+inline GapSig gapSig(GJBaseGameLayer* l) {
+    GapSig g;
+    if (!l || !l->m_objects) return g;
+    g.have = true;
+    uint64_t h = 1469598103934665603ULL;
+    for (auto* o : CCArrayExt<GameObject*>(l->m_objects)) {
+        if (!o || !(o->m_isDisabled || o->m_isDisabled2)) continue;
+        ++g.disabled;
+        const int uid = o->m_uniqueID;
+        const uint8_t f = (uint8_t)((o->m_isDisabled ? 1 : 0) | (o->m_isDisabled2 ? 2 : 0));
+        h = fnvAdd(fnvAdd(h, &uid, sizeof(uid)), &f, 1);
+        g.dis.push_back(GapSig::Dis{o, uid, o->m_objectID, f});
+    }
+    g.disabledHash = h;
+    std::sort(g.dis.begin(), g.dis.end(), [](const GapSig::Dis& a, const GapSig::Dis& b) { return a.uid < b.uid; });
+    if (l->m_effectManager) {
+        for (const auto& kv : l->m_effectManager->m_persistentItemCountMap) {
+            g.persist += mix64(((uint64_t)(uint32_t)kv.first << 32) ^ (uint32_t)kv.second);
+            ++g.persistN;
+        }
+    }
+    PlayerObject* ps[2] = {l->m_player1, l->m_player2};
+    for (int k = 0; k < 2; ++k) {
+        PlayerObject* p = ps[k];
+        if (!p) continue;
+        for (const auto& kv : p->m_rotateObjectsRelated) {
+            uint64_t e = fnvAdd(1469598103934665603ULL, &kv.first, sizeof(kv.first));
+            e = fnvAdd(e, &kv.second, sizeof(kv.second));
+            g.rot[k] += mix64(e);
+            ++g.rotN[k];
+        }
+        g.follow[k] = fnvAdd(1469598103934665603ULL, p->m_playerFollowFloats.data(),
+                             p->m_playerFollowFloats.size() * sizeof(float));
+        g.followN[k] = p->m_playerFollowFloats.size();
+        uint64_t t = 1469598103934665603ULL;
+        if (p->m_touchingRings) {
+            for (unsigned i = 0; i < p->m_touchingRings->count(); ++i) {
+                auto* o = static_cast<GameObject*>(p->m_touchingRings->objectAtIndex(i));
+                const int uid = o ? o->m_uniqueID : -1;
+                t = fnvAdd(t, &uid, sizeof(uid));
+            }
+            g.touchingN[k] = p->m_touchingRings->count();
+        }
+        g.touching[k] = t;
+    }
+    g.calcN = l->m_calcNonEffectObjectsSize;
+    h = 1469598103934665603ULL;
+    for (int i = 0; i < g.calcN && (size_t)i < l->m_calcNonEffectObjects.size(); ++i) {
+        GameObject* o = l->m_calcNonEffectObjects[(size_t)i];
+        const int uid = o ? o->m_uniqueID : -1;
+        h = fnvAdd(h, &uid, sizeof(uid));
+    }
+    g.calc = h;
+    return g;
+}
+
+// The parts two fingerprints differ in -- 1 disabled objects, 2 persistent items, 4 rotate objects,
+// 8 follow floats, 16 touching rings, 32 the non-effect list -- and a line naming them with their
+// sizes (at the take / now).
+constexpr int kGapParts = 6;
+inline const char* const kGapName[kGapParts] = {"disabled objects", "persistent items", "rotate objects",
+                                                "follow floats", "touching rings", "non-effect list"};
+inline int gapDiff(const GapSig& a, const GapSig& b, std::string* line) {
+    if (!a.have || !b.have) {
+        if (line) *line = "not taken";
+        return 0;
+    }
+    int d = 0;
+    if (a.disabled != b.disabled || a.disabledHash != b.disabledHash) d |= 1;
+    if (a.persist != b.persist || a.persistN != b.persistN) d |= 2;
+    for (int k = 0; k < 2; ++k) {
+        if (a.rot[k] != b.rot[k] || a.rotN[k] != b.rotN[k]) d |= 4;
+        if (a.follow[k] != b.follow[k] || a.followN[k] != b.followN[k]) d |= 8;
+        if (a.touching[k] != b.touching[k] || a.touchingN[k] != b.touchingN[k]) d |= 16;
+    }
+    if (a.calc != b.calc || a.calcN != b.calcN) d |= 32;
+    if (line) {
+        char buf[420];
+        snprintf(buf, sizeof(buf),
+                 "disabled objects %s (%d/%d), persistent items %s (%zu/%zu), rotate objects %s (p1 %zu/%zu, p2 "
+                 "%zu/%zu), follow floats %s (p1 %zu/%zu, p2 %zu/%zu), touching rings %s (p1 %zu/%zu, p2 %zu/%zu), "
+                 "non-effect list %s (%d/%d)",
+                 d & 1 ? "DIFFER" : "same", a.disabled, b.disabled, d & 2 ? "DIFFER" : "same", a.persistN,
+                 b.persistN, d & 4 ? "DIFFER" : "same", a.rotN[0], b.rotN[0], a.rotN[1], b.rotN[1],
+                 d & 8 ? "DIFFER" : "same", a.followN[0], b.followN[0], a.followN[1], b.followN[1],
+                 d & 16 ? "DIFFER" : "same", a.touchingN[0], b.touchingN[0], a.touchingN[1], b.touchingN[1],
+                 d & 32 ? "DIFFER" : "same", a.calcN, b.calcN);
+        *line = buf;
+        // which objects: "uid:id flags-at-take>flags-now", the first eight
+        if (d & 1) {
+            std::map<int, std::pair<const GapSig::Dis*, const GapSig::Dis*>> by;
+            for (const auto& e : a.dis) by[e.uid].first = &e;
+            for (const auto& e : b.dis) by[e.uid].second = &e;
+            int shown = 0;
+            *line += " [";
+            for (const auto& [uid, p] : by) {
+                const int fa = p.first ? p.first->flags : 0, fb = p.second ? p.second->flags : 0;
+                if (fa == fb) continue;
+                if (shown++ >= 8) break;
+                const int id = p.first ? p.first->id : p.second->id;
+                *line += (shown > 1 ? " " : "") + std::to_string(uid) + ":" + std::to_string(id) + " "
+                         + std::to_string(fa) + ">" + std::to_string(fb);
+            }
+            *line += "]";
+        }
+    }
+    return d;
+}
+// cfg cpdisabled: every object's two disabled flags put back as the take had them (`take`: its GapSig,
+// whose list holds the objects disabled then; any other object is put back enabled). Returns how many
+// objects it changed.
+inline int restoreDisabled(GJBaseGameLayer* l, const GapSig& take) {
+    if (!l || !l->m_objects || !take.have) return 0;
+    std::unordered_map<GameObject*, uint8_t> want;
+    want.reserve(take.dis.size() * 2 + 1);
+    for (const auto& e : take.dis) want[e.obj] = e.flags;
+    int changed = 0;
+    for (auto* o : CCArrayExt<GameObject*>(l->m_objects)) {
+        if (!o) continue;
+        const auto it = want.find(o);
+        const uint8_t f = it == want.end() ? 0 : it->second;
+        const bool d1 = (f & 1) != 0, d2 = (f & 2) != 0;
+        if (o->m_isDisabled == d1 && o->m_isDisabled2 == d2) continue;
+        o->m_isDisabled = d1;
+        o->m_isDisabled2 = d2;
+        ++changed;
+    }
+    return changed;
+}
+
+// cfg cpfollowfloats: each player's m_playerFollowFloats at the take, and put back after a restore.
+inline void captureFollow(GJBaseGameLayer* l, Rec& r) {
+    PlayerObject* ps[2] = {l ? l->m_player1 : nullptr, l ? l->m_player2 : nullptr};
+    for (int k = 0; k < 2; ++k) {
+        r.followFloats[k].clear();
+        if (ps[k]) r.followFloats[k].assign(ps[k]->m_playerFollowFloats.begin(), ps[k]->m_playerFollowFloats.end());
+    }
+    r.haveFollow = true;
+}
+inline void restoreFollow(GJBaseGameLayer* l, const Rec& r) {
+    if (!l || !r.haveFollow) return;
+    PlayerObject* ps[2] = {l->m_player1, l->m_player2};
+    for (int k = 0; k < 2; ++k) {
+        if (!ps[k]) continue;
+        auto& v = ps[k]->m_playerFollowFloats;
+        v.clear();
+        for (float f : r.followFloats[k]) v.push_back(f);
+    }
+}
+
+// cfg cprotnode: the node rotation of every object a trigger has rotated (a rotation offset that is
+// not 0), saved at the take and put back after a restore. A head flight's node rotation is what the
+// rotate steps added to it one by one; the restore sets it from the object's start rotation plus its
+// offset instead, which the float rounding of those steps leaves apart (on a heavy custom level a
+// rotating hazard came back at 277.632446 where the flight that took the checkpoint had 277.632324,
+// and the moving-geometry recording parted 15 ticks later). Returns how many it changed.
+inline void captureRotNodes(GJBaseGameLayer* l, Rec& r) {
+    r.rotNodes.clear();
+    if (!l || !l->m_objects) return;
+    for (auto* o : CCArrayExt<GameObject*>(l->m_objects)) {
+        if (!o || (o->m_rotationXOffset == 0.f && o->m_rotationYOffset == 0.f)) continue;
+        r.rotNodes.push_back(Rec::RotNode{o, o->getRotationX(), o->getRotationY()});
+    }
+    r.haveRotNodes = true;
+}
+inline int restoreRotNodes(const Rec& r) {
+    if (!r.haveRotNodes) return 0;
+    int changed = 0;
+    for (const auto& e : r.rotNodes) {
+        if (e.obj->getRotationX() == e.rx && e.obj->getRotationY() == e.ry) continue;
+        e.obj->setRotationX(e.rx);
+        e.obj->setRotationY(e.ry);
+        ++changed;
+    }
+    return changed;
+}
+
+// cfg cpflightgaps: restores checked, and by part the restores where it came back different
+inline long long g_gapChecks = 0, g_gapPart[kGapParts] = {0, 0, 0, 0, 0, 0};
+
 // One attempt: the plan it flew, its checkpoints, and -- once it has ended and been banked -- its
 // books in full, which a flight restored from one of its checkpoints takes up to that tick.
 struct Set {
@@ -688,6 +917,10 @@ inline bool g_forceHead = false;
 inline bool g_headPending = false;   // ...and the reset that starts it, at a frame boundary
 // The probe (cfg cpflightprobe): queued at a death, flown while the solve runs, compared at its end.
 inline Choice g_probeQueued;
+// cfg cpflightprobecarry: what the probe inherits (taken at its reset, hooks_gamelayer cpStart) and the
+// parts in which that differs from what the checkpoint's attempt inherited
+inline CarrySig g_probeInherit;
+inline int g_probeInheritDiff = 0;
 inline bool g_probeFlying = false;
 // ...and its control, the same plan from the head: queued at the probe's end, reset into at the next
 // frame boundary, flown and compared at its own end
@@ -705,10 +938,27 @@ inline double g_takeMs = 0.0, g_startMs = 0.0;
 // end (death or clear). The work the flag saves is the head flights' ticks against the flights' from a
 // checkpoint; the performance line (summary) puts them on one line.
 inline long long g_invalid = 0;
+// cfg cppersistguard: installs flown from the head because the level keeps items across attempts
+inline long long g_persistRefused = 0;
 // the carry gate (CarrySig): installs that had a checkpoint to fly from but flew from the head because
 // what the attempt now inherits is not what the checkpoint's attempt inherited, by part (band, latch,
 // area list, players; one install can count in several), and probes skipped for the same reason
 inline long long g_carryFallbacks = 0, g_carryPart[5] = {0, 0, 0, 0, 0}, g_probeSkips = 0;
+// cfg cpflightprobecarry: the probes flown on a different inheritance, by the parts (sigDiff) in which
+// the probe's or the control's inheritance differs from the checkpoint attempt's: flown, equal from
+// t=2 on (row 1 is the inheritance itself), and the mismatches whose first difference after t=1 comes
+// at or before the checkpoint
+inline long long g_carryProbeN[32] = {}, g_carryProbeEq[32] = {}, g_carryProbeBefore[32] = {};
+// " band latch area players nodes" for the parts of a sigDiff, " none" for 0
+inline std::string carryParts(int d) {
+    std::string s;
+    if (d & 1) s += " band";
+    if (d & 2) s += " latch";
+    if (d & 4) s += " area";
+    if (d & 8) s += " players";
+    if (d & 16) s += " nodes";
+    return s.empty() ? " none" : s;
+}
 inline void countCarryMiss(int parts) {
     ++g_carryFallbacks;
     for (int k = 0; k < 5; ++k)
@@ -738,7 +988,7 @@ inline void objLine(GJBaseGameLayer* l, const char* when, long long t) {
     if (!o) { writeResult(std::string("cpflight: obj ") + when + " uid not found"); return; }
     const auto r = o->getObjectRect();
     const float* f = &o->m_positionXOffset;
-    char b[760];
+    char b[1000];
     snprintf(b, sizeof(b), "cpflight: obj %s t=%lld uid=%d pos=(%.3f,%.3f) real=(%.4f,%.4f) "
              "off=(%g,%g,%g,%g,%g,%g,%g,%g,%g,%g) stamp=%d 4c0=%d 4c4=%d 4cc=%d skip=%d dirty=%d "
              "rect=(%.3f,%.3f %.3fx%.3f) disabled=%d/%d circle=(r %.4f wh %.4f,%.4f scale %.4f,%.4f "
@@ -751,7 +1001,16 @@ inline void objLine(GJBaseGameLayer* l, const char* when, long long t) {
              (double)o->m_scaleY, (double)o->m_startScaleX, (double)o->m_startScaleY,
              (double)o->m_scaleXOffset, (double)o->m_scaleYOffset, (double)o->getScaleX(),
              (double)o->getScaleY());
-    writeResult(b);
+    // the rotation, as the node holds it (float bits too), its offsets and start, and the object's own
+    char rb[240];
+    const float rx = o->getRotationX(), ry = o->getRotationY();
+    uint32_t bx = 0, by = 0;
+    std::memcpy(&bx, &rx, 4);
+    std::memcpy(&by, &ry, 4);
+    snprintf(rb, sizeof(rb), " rot=(%.6f,%.6f bits %08x,%08x) rotoff=(%.6f,%.6f) rotstart=(%.6f,%.6f) objrot=%.6f",
+             (double)rx, (double)ry, bx, by, (double)o->m_rotationXOffset, (double)o->m_rotationYOffset,
+             (double)o->m_startRotationX, (double)o->m_startRotationY, (double)o->getObjectRotation());
+    writeResult(std::string(b) + rb);
 }
 
 // cfg `cpflightlayerdiff=1` (print only): the PlayLayer's raw bytes at each checkpoint, compared after a
@@ -805,7 +1064,7 @@ inline std::string tweensLine(GJBaseGameLayer* l) {
 // GD's game events a checkpoint of ours raises, which the flight it reproduces never raised: resetLevel
 // raises CheckpointRespawn (64) on the checkpoint path (0x3b97ac), and a level can listen for it -- an
 // Event trigger whose group spawns, after a delay, the Static Camera trigger that starts the camera's
-// blend tweens (21/22, updateStaticCameraPosToGroup 0x23ee40). Measured on MOAI: restored from t=4,800,
+// blend tweens (21/22, updateStaticCameraPosToGroup 0x23ee40). Measured on a custom level: restored from t=4,800,
 // the tweens restarted ten ticks later and the camera and the band parted from the flight. The events
 // are dropped while our checkpoint is taken (Checkpoint, 60) and while it is restored (64), and counted.
 inline bool g_inTake = false;
@@ -854,6 +1113,8 @@ inline void reset() {
     g_deepest.reset();
     g_pending = Choice{};
     g_probeQueued = Choice{};
+    g_probeInherit = CarrySig{};
+    g_probeInheritDiff = 0;
     g_probeSet.reset();
     g_probeRec.reset();
     g_probeFlying = false;
@@ -911,6 +1172,10 @@ inline void resetCounts() {
     g_eventsDropped = 0;
     g_carryFallbacks = g_probeSkips = g_nodeDrift = g_nodeChecks = g_nodePremise = 0;
     for (auto& n : g_carryPart) n = 0;
+    for (int k = 0; k < 32; ++k) g_carryProbeN[k] = g_carryProbeEq[k] = g_carryProbeBefore[k] = 0;
+    g_gapChecks = 0;
+    for (auto& n : g_gapPart) n = 0;
+    g_persistRefused = 0;
 }
 
 // An attempt ended at `end` (the death or completion line). Counted once per attempt, by its kind.
@@ -930,7 +1195,7 @@ inline void noteEnd(long long end) {
 inline long long firstDifference(const std::vector<InputCmd>& a, const std::vector<InputCmd>& b) {
     const size_t n = std::min(a.size(), b.size());
     for (size_t i = 0; i < n; ++i)
-        if (a[i].step != b[i].step || a[i].down != b[i].down)
+        if (a[i].step != b[i].step || a[i].down != b[i].down || a[i].p2 != b[i].p2)
             return std::min<long long>(a[i].step, b[i].step);
     if (a.size() > n) return a[n].step;
     if (b.size() > n) return b[n].step;
@@ -1017,7 +1282,8 @@ inline void captureBooks(Rec& r) {
         r.gtLastTick = grouptrace::g_lastTick;
         r.gt.reserve(grouptrace::g_objs.size());
         for (const auto& t : grouptrace::g_objs)
-            r.gt.push_back(GtState{t.cx, t.cy, t.w, t.h, t.rot, t.on, t.env, t.emitted});
+            r.gt.push_back(GtState{t.cx, t.cy, t.w, t.h, t.rot, t.on, t.env, t.emitted,
+                                   t.pcx, t.pcy, t.pw, t.ph, t.prot, t.pvalid});
     }
 }
 
@@ -1094,6 +1360,21 @@ inline bool usable(const Set& s, const Rec& r) {
     return true;
 }
 
+// cfg cpcarryparts: the parts of the carry (sigDiff bits) a checkpoint flight is refused on. The
+// probes on different inheritances (cfg cpflightprobecarry, 2026-10-14: two levels and the four video
+// levels) found no flight changed from t=2 on by the area list or the players' snap, and none by the
+// stale nodes; the band moved pmax up to its first event. The nodes part was taken because the stair
+// snap reads the snapped object's node, which cfg snapnodesync now puts at the real position before
+// a screen-off snap -- so it is dropped only there, and stays in force with the screen on or the sync
+// off.
+// visibilityPassOff (playlayer_helpers.hpp, which comes after this header), set by hooks_gamelayer.cpp
+inline bool (*g_screenOff)() = nullptr;
+inline int gateMask() {
+    int m = g_cfg.cpCarryParts & 31;
+    if (!(g_cfg.snapNodeSync && g_screenOff && g_screenOff())) m |= 16;
+    return m;
+}
+
 // The latest usable checkpoint whose tick is below the first step at which `plan` leaves the set's
 // own plan, over the banked sets whose attempt inherited what an attempt inherits now (`now`).
 // `carryMiss` gets the parts in which a set that had such a checkpoint differed (sigDiff), 0 if none.
@@ -1111,7 +1392,7 @@ inline Choice choose(const std::vector<InputCmd>& plan, const CarrySig& now, int
             const Rec& r = **it;
             if (r.tick >= D) continue;
             if (!usable(*s, r)) continue;
-            if (const int d = sigDiff(s->startSig, now)) {
+            if (const int d = sigDiff(s->startSig, now) & gateMask()) {
                 miss |= d;
                 if (why) {
                     *why += " attempt " + std::to_string(s->attempt) + " (checkpoint t=" + std::to_string(r.tick)
@@ -1133,6 +1414,20 @@ inline Choice choose(const std::vector<InputCmd>& plan, const CarrySig& now, int
 inline bool requestStart(const std::vector<InputCmd>& plan) {
     if (!on() || g_cfg.cpFlightProbe) return false;
     if (g_forceHead) return false;
+    // cfg cppersistguard: GD keeps the Item Persistence table (m_persistentItemCountMap) across attempts
+    // and a checkpoint does not rewind it, so a flight from a checkpoint skips the head's own writes to it
+    // before T that a head flight makes again. Not measured either way: while the table holds anything
+    // (and attemptone does not pin every attempt as the first), the plan flies from the head.
+    if (g_cfg.cpPersistGuard && !attemptPinActive()) {
+        auto* pl = PlayLayer::get();
+        if (pl && pl->m_effectManager && !pl->m_effectManager->m_persistentItemCountMap.empty()) {
+            if (g_persistRefused++ == 0)
+                writeResult("cpflight: from the head - the level keeps items across attempts (Item Persistence: "
+                            + std::to_string(pl->m_effectManager->m_persistentItemCountMap.size())
+                            + " kept), which a checkpoint does not rewind (cfg cppersistguard; said once)");
+            return false;
+        }
+    }
     int miss = 0;
     std::string why;
     Choice c = choose(plan, carrySig(PlayLayer::get()), &miss, &why);
@@ -1213,7 +1508,7 @@ inline void splice(const Choice& c) {
                 left -= got;
             }
         }
-        // text mode, as build() and roll() open it, positioned at the end
+        // as build() and roll() open it (RowFile writes in binary mode), positioned at the end
         grouptrace::g_out.open(cur, std::ios::in | std::ios::out);
         grouptrace::g_out.seekp(0, std::ios::end);
         grouptrace::g_rows = r.gtRows;
@@ -1223,6 +1518,7 @@ inline void splice(const Choice& c) {
             const GtState& g = r.gt[i];
             t.cx = g.cx; t.cy = g.cy; t.w = g.w; t.h = g.h; t.rot = g.rot;
             t.on = g.on; t.env = g.env; t.emitted = g.emitted;
+            t.pcx = g.pcx; t.pcy = g.pcy; t.pw = g.pw; t.ph = g.ph; t.prot = g.prot; t.pvalid = g.pvalid;
         }
     }
 }
@@ -1234,15 +1530,16 @@ inline void splice(const Choice& c) {
 // The probe is compared with the control on every row from t=1 (its rows up to T are the ones
 // it took from the checkpoint's attempt), the death, the seeds, the coin books and the recording byte
 // for byte. A probe is flown only when what it inherits now is what the checkpoint's attempt inherited
-// (CarrySig), as a flight from a checkpoint is; otherwise it is skipped and counted. Neither flight is
-// booked by the loop, and the solve's plan is not installed until both are over.
+// (CarrySig), as a flight from a checkpoint is; otherwise it is skipped and counted -- unless cfg
+// cpflightprobecarry asks for it, to measure what the difference does (counted apart). Neither flight
+// is booked by the loop, and the solve's plan is not installed until both are over.
 
 // Queued at a banked death: the dead attempt's latest checkpoint at least kProbeMin before it.
 // cfg cpflightprobeat=<tick>: from the latest checkpoint at or before that tick instead, so that every
 // death past it flies the same stretch again (a stretch the deaths themselves never start near).
 inline void queueProbe() {
     if (!probeMode() || !g_dead || g_dead->end < 0) return;
-    if (sigDiff(g_dead->startSig, carrySig(PlayLayer::get())) != 0) {
+    if (sigDiff(g_dead->startSig, carrySig(PlayLayer::get())) != 0 && !g_cfg.cpFlightProbeCarry) {
         ++g_probeSkips;
         return;
     }
@@ -1389,6 +1686,10 @@ struct ProbeCap {
     CarrySig sourceSig;    // what the checkpoint's attempt inherited
     int controlCarry = 0;  // sigDiff of it against what the control inherits (0 = the same)
     CarryFull atT;         // the carry state right after the probe's restore
+    // cfg cpflightprobecarry: what the probe inherited, its sigDiff against the source's, and the
+    // control's inheritance against the probe's
+    CarrySig probeSig;
+    int probeCarry = 0, controlVsProbe = 0;
 };
 inline ProbeCap g_probeCap;
 
@@ -1413,6 +1714,10 @@ inline std::string probeCapture(long long end, float endX, const char* how) {
     p.attempt = g_attempt;
     p.sourceAttempt = g_probeSet ? g_probeSet->attempt : -1;
     if (g_probeSet) p.sourceSig = g_probeSet->startSig;
+    p.probeSig = std::move(g_probeInherit);
+    p.probeCarry = g_probeInheritDiff;
+    g_probeInherit = CarrySig{};
+    g_probeInheritDiff = 0;
     p.atT = std::move(g_probeAtT);
     g_probeAtT = CarryFull{};
     g_controlAtT = CarryFull{};
@@ -1451,6 +1756,10 @@ inline std::string controlEnd(long long end, float endX, const char* how) {
     const long long last = std::min(end, p.end);
     long long n = 0, same = 0, firstBad = -1;
     const char* badField = nullptr;
+    // cfg cpflightprobecarry: the first difference after t=1. Row 1 is written before the attempt's
+    // first physics step, so it holds what the reset left -- the inheritance itself
+    long long firstLate = -1;
+    const char* lateField = nullptr;
     std::map<std::string, long long> fieldCount;
     // each attempt's clock at its first row (see rowDiff)
     double c0p = 0.0, c0c = 0.0;
@@ -1470,12 +1779,17 @@ inline std::string controlEnd(long long end, float endX, const char* how) {
         const bool hb = (size_t)t < anchors::g_live.size() && anchors::g_live[(size_t)t].valid;
         if (!ha || !hb) {
             if (ha != hb && firstBad < 0) { firstBad = t; badField = "missing row"; }
+            if (ha != hb && t > 1 && firstLate < 0) { firstLate = t; lateField = "missing row"; }
             continue;
         }
         ++n;
         const char* f = rowDiff(p.rows[(size_t)t], anchors::g_live[(size_t)t], fieldCount, &c0p, &c0c);
-        if (!f) ++same;
-        else if (firstBad < 0) { firstBad = t; badField = f; }
+        if (!f) {
+            ++same;
+        } else {
+            if (firstBad < 0) { firstBad = t; badField = f; }
+            if (t > 1 && firstLate < 0) { firstLate = t; lateField = f; }
+        }
     }
     std::string fields;
     for (const auto& kv : fieldCount) fields += " " + kv.first + "=" + std::to_string(kv.second);
@@ -1514,12 +1828,32 @@ inline std::string controlEnd(long long end, float endX, const char* how) {
     bool carrySame = false;
     const std::string carry = compareCarryFull(p.atT, g_controlAtT, &carrySame);
     g_controlAtT = CarryFull{};
-    const bool all = n > 0 && same == n && firstBad < 0 && deathSame && seedsSame && coinsSame && gtSame
-                     && carrySame;
+    // physics: the rows, the death, the seeds, the coin books and the recording; all: and the carry state
+    const bool physics = n > 0 && same == n && firstBad < 0 && deathSame && seedsSame && coinsSame && gtSame;
+    const bool all = physics && carrySame;
     // A control that inherits differently from the checkpoint's attempt is not the flight a checkpoint
-    // flight stands in for (the gate would have flown the head): printed, counted as skipped.
+    // flight stands in for (the gate would have flown the head): printed, counted as skipped. With cfg
+    // cpflightprobecarry such a pair -- or one whose probe inherited differently -- is the measurement:
+    // counted apart, by the parts, with where its first difference falls against the checkpoint.
     std::string verdict = all ? "EQUAL" : "MISMATCH";
-    if (p.controlCarry != 0) {
+    if (g_cfg.cpFlightProbeCarry && (p.controlCarry != 0 || p.probeCarry != 0)) {
+        --g_probes;
+        const int k = (p.controlCarry | p.probeCarry) & 31;
+        // equal from t=2 on: only row 1, the inherited values themselves, differs
+        const bool late = n > 0 && firstLate < 0 && deathSame && seedsSame && coinsSame && gtSame;
+        ++g_carryProbeN[k];
+        if (physics || late) ++g_carryProbeEq[k];
+        else if (firstLate >= 0 && firstLate <= p.from) ++g_carryProbeBefore[k];
+        verdict = std::string(physics ? "EQUAL IN PHYSICS" : late ? "EQUAL FROM T=2" : "MISMATCH")
+                  + " on a different inheritance - parts"
+                  + " source/control" + carryParts(p.controlCarry) + ", source/probe" + carryParts(p.probeCarry)
+                  + ", probe/control" + carryParts(p.controlVsProbe)
+                  + (physics || late ? ""
+                     : firstLate < 0 ? "; the rows agree from t=2, the death, seeds, coins or groups do not"
+                     : std::string("; the first difference after t=1 is t=") + std::to_string(firstLate) + " "
+                           + lateField + (firstLate <= p.from ? ", at or before the checkpoint"
+                                                              : ", after the checkpoint"));
+    } else if (p.controlCarry != 0) {
         --g_probes;
         ++g_probeSkips;
         verdict = "NOT COMPARED - the control inherits differently (parts " + std::to_string(p.controlCarry)
@@ -1527,7 +1861,7 @@ inline std::string controlEnd(long long end, float endX, const char* how) {
     } else if (all) {
         ++g_probesEqual;
     }
-    char b[1600];
+    char b[2600];
     snprintf(b, sizeof(b),
              "cpflight: probe att=%d (control att=%d; checkpoint of att %d at t=%lld): the probe %s at t=%lld "
              "x=%.3f, the control %s at t=%lld x=%.3f | rows t=1..%lld equal on all fields %lld/%lld%s%s%s%s%s "
@@ -1560,14 +1894,33 @@ inline std::string summary() {
              g_startMs, g_refused, g_invalid, g_carryFallbacks, g_carryPart[0], g_carryPart[1],
              g_carryPart[2], g_carryPart[3], g_eventsDropped, g_probesEqual, g_probes, g_probeSkips,
              g_probeFlights.ticks, g_probeFlights.ms / 1000.0);
+    std::string out = b;
     if (on()) {
         char e[300];
         snprintf(e, sizeof(e), " | stale nodes: %lld fallbacks on them; head resets whose stale nodes were not the "
                  "predicted ones %lld of %lld, that left a real position off its start %lld",
                  g_carryPart[4], g_nodeDrift, g_nodeChecks, g_nodePremise);
-        return std::string(b) + e;
+        out += e;
     }
-    return b;
+    if (g_cfg.cpFlightProbeCarry) {
+        out += " | probes on a different inheritance (parts: flown / equal from t=2 on / first difference after "
+               "t=1 at or before the checkpoint):";
+        bool any = false;
+        for (int k = 1; k < 32; ++k) {
+            if (!g_carryProbeN[k]) continue;
+            any = true;
+            out += carryParts(k) + " " + std::to_string(g_carryProbeN[k]) + "/" + std::to_string(g_carryProbeEq[k])
+                   + "/" + std::to_string(g_carryProbeBefore[k]) + ";";
+        }
+        if (!any) out += " none";
+    }
+    if (g_cfg.cpPersistGuard) out += " | from the head on kept items " + std::to_string(g_persistRefused);
+    if (g_cfg.cpFlightGaps) {
+        out += " | restore gaps (restores that brought it back different, of " + std::to_string(g_gapChecks) + "):";
+        for (int k = 0; k < kGapParts; ++k)
+            out += std::string(" ") + kGapName[k] + " " + std::to_string(g_gapPart[k]) + (k + 1 < kGapParts ? "," : "");
+    }
+    return out;
 }
 
 }  // namespace cpflight

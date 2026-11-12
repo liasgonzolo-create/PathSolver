@@ -2,6 +2,7 @@
 // On-screen HUD that stays visible while rendering is skipped.
 #include "mod/level_slice.hpp"
 #include "mod/takeover.hpp"         // the human takeover's line under the badge
+#include "mod/replay_panel.hpp"     // GD's record of the deepest verified attempt, in the free corner
 
 using namespace p1;
 
@@ -143,37 +144,44 @@ inline void fillKeysHud(cocos2d::CCLabelBMFont* lbl) {
     // Listed in key order. Anything else reads as a jumble -- there is no other order a reader
     // can predict, and this list is scanned, not read.
     // The key names are read from the bindings rather than spelled out, since they can be rebound.
-    char buf[768];
+    // With the screen dark and the replay panel playing, the transport keys are the panel's (replay_panel.hpp): the legend
+    // says so, since the same keys are the game's the moment the screen is on.
+    const bool panelKeys = replaypanel::owns();
+    char buf[1024];
     snprintf(buf, sizeof(buf),
         "SPEED  %s%s%s\n"
         "%s   hide this overlay%s\n"
-        "%s   pause / resume\n"
-        "%s / %s   step 1 / 10 substeps (hold to repeat)\n"
+        "%s   pause / resume%s\n"
+        "%s / %s   step 1 / 10 %s (hold to repeat)\n"
         "%s"
         "%s   hitboxes: off / on / only\n"
         "%s   replay from the start\n"
         "%s   quit to the level screen\n"
         "%s  iteration map: %s\n"
+        "%s   replay panel: %s\n"
         "%s / %s   %s\n"
-        "%s / %s   speed up / down   -   or drag the bar",
+        "%s / %s   speed up / down%s",
         spd, stopPart, renderPart,
         keyName(Key::Overlay).c_str(),
         showingSolve() ? "  (disabled while solving)" : "",
-        keyName(Key::Pause).c_str(),
-        keyName(Key::Step1).c_str(), keyName(Key::Step10).c_str(),
+        keyName(Key::Pause).c_str(), panelKeys ? "  (the panel's replay)" : "",
+        keyName(Key::Step1).c_str(), keyName(Key::Step10).c_str(), panelKeys ? "ticks of the panel" : "substeps",
         renderLine,
         keyName(Key::Hitboxes).c_str(),
         keyName(Key::Replay).c_str(),
         keyName(Key::Quit).c_str(),
         keyName(Key::Itermap).c_str(), itermap::mapWanted() ? "on" : "off",
+        keyName(Key::ReplayPanel).c_str(), replaypanel::modeName(),
         keyName(Key::SeekBack).c_str(), keyName(Key::SeekForward).c_str(),
         // The arrows change job with the stop: seeking needs time to flow, so while it is frozen
         // they are frame-step keys instead. Saying which they are right now costs one word. While
         // the loop owns the level they are neither -- both would move a round it is measuring.
-        showingSolve()                ? "(disabled while solving)"
+        panelKeys                      ? "seek the panel back / forward (hold to accelerate)"
+        : showingSolve()               ? "(disabled while solving)"
         : (g_paused || probe::g_pause) ? "step back / forward (10 substeps)"
                                        : "seek back / forward (hold to accelerate)",
-        keyName(Key::Faster).c_str(), keyName(Key::Slower).c_str());
+        keyName(Key::Faster).c_str(), keyName(Key::Slower).c_str(),
+        panelKeys ? "  (the panel's pace)   -   or click / drag its bar" : "   -   or drag the bar");
     lbl->setString(buf);
 }
 
@@ -430,6 +438,11 @@ inline void updateOverlays(cocos2d::CCNode* gameLayer) {
     //    where a timeline sits on top of the thing it is a timeline OF. It takes no part in the
     //    cursor above, so turning it on cannot move any of the lines already there.
     itermap::draw(parent, PlayLayer::get());
+    // 4b. the replay panel (its own key), while a solve runs. The free area from the middle to the top-right, so like the
+    //     map it takes no part in the column above -- but it keeps its left edge clear of the text lines that reach into
+    //     it (the elapsed time ends the first line, the render state the keys line). Off, or outside a solve, it hides
+    //     what it made and does nothing else.
+    replaypanel::update(parent, show, {BADGE_TAG, TAKEOVER_TAG, HUD_TAG, KEYS_TAG});
 #ifndef GEODE_IS_WINDOWS
     // 5. the buttons standing in for the keys. Not hidden by the TEXT button (it would hide
     //    itself), only folded by their own top button.

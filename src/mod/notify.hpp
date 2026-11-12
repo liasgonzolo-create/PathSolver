@@ -1,6 +1,7 @@
 #pragma once
 // The notifications the mod puts on screen, and the watchdog that takes them back off.
 #include "mod/trace_io.hpp"
+#include "mod/ui_toast.hpp"
 
 using namespace p1;
 
@@ -24,6 +25,16 @@ using namespace p1;
 // Everything here is bookkeeping around Geode's own calls -- no notification is created anywhere
 // else in the mod (see notify::show's callers).
 namespace notify {
+
+// On 2.209 geode::Notification throws inside libcocos2d the first time one is created (Geode.dll
+// builds it with CCNode virtual calls numbered for 2.2081), so the mod's own toast stands in for
+// it there; it offers the same six calls. The comments below describe Geode's, which is what the
+// 2.2081 build still uses.
+#if GEODE_COMP_GD_VERSION >= 22090
+using Notification = gdsolver::ui::Toast;
+#else
+using Notification = geode::Notification;
+#endif
 
 // cfg `notifyfix=0` turns off BOTH halves of the repair (the re-arm after a purge and the
 // watchdog), so that "was there anything to fix" can be answered by measurement rather than by
@@ -117,6 +128,11 @@ inline void show(const std::string& text, NotificationIcon icon, float seconds) 
 
 // Once per frame, from the same place audio::sync runs.
 inline void watchdog() {
+#if GEODE_COMP_GD_VERSION >= 22090
+    // The mod's own toast does not outlive the scene it was shown on by itself (Geode's notifications are kept across scenes).
+    if (g_cur) g_cur->keepOnScene();
+    if (g_retiring) g_retiring->keepOnScene();
+#endif
     if (!g_fix) return;
     // The retiring one first: everything else, ours and everyone else's, is queued behind its
     // pop. Its budget is the 0.5 s fade-out; three seconds is a long frame plus slack.

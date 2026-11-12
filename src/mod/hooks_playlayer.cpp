@@ -1,5 +1,6 @@
 // PlayLayer hook: attempt boundaries, checkpoints, death / completion, cleanup.
 #include "mod/playlayer_helpers.hpp"
+#include "mod/window_guard.hpp"
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/EndLevelLayer.hpp>
 
@@ -73,6 +74,7 @@ static void persistWorldApply(GJEffectManager* em) {
 }
 
 class $modify(PlayLayer) {
+    GDSOLVER_HOOK_GUARD()
     // Catch auto-checkpoint creation (cfg `ckpttrace=1`). In 2.208 creation and storage are
     // separate, and storage is delayed/retried until the state is safe, so both are marked
     CheckpointObject* markCheckpoint() {
@@ -165,13 +167,15 @@ class $modify(PlayLayer) {
         // A session in progress (g_started && !g_sessionOver) (including autorun.cfg
         // launches) is not interfered with. Leftovers of a finished session count as absent
         // (uiConfigureSession resets everything)
+        // TEST ONLY (cfg deathtest_testonly, record_gate.hpp): flag the level for the death-data upload, so the network layer has a real one to refuse
+        if (g_deathTestTestOnly) gate::deathtest::arm(level);
         const bool armed = level && g_uiArmedLevel == level;
         if (g_uiArmedLevel && !armed)
             log::info("play menu: armed for another level, entering {} unarmed",
                       level ? level->m_levelID.value() : -1);
         g_uiArmedLevel = nullptr;   // one entry per Start, whatever is decided below
         bool want = (!g_started || g_sessionOver) && g_uiMode > 0 && armed;
-        if (want) uiConfigureSession(level->m_levelID.value());
+        if (want && uiConfigureSession(level->m_levelID.value())) attemptAutoForLevel(level);
         // Sample the level's own record before it has run a tick, so the session-end line can
         // state whether anything was written into it (see progressDiff). A level a slice swap
         // brings in (level_slice.hpp) is not sampled: the record the line speaks for stays the
@@ -181,6 +185,15 @@ class $modify(PlayLayer) {
         } else {
             g_progressLevel = level;
             g_progressAtStart = sampleProgress(level);
+            // ...and everything the game would save, for the memory audit (record_gate.hpp).
+            // Only for a session: a player entering a level is not asked to pay for it.
+            if (g_started) {
+                gate::memaudit::baseline();
+#ifdef GEODE_IS_WINDOWS
+                if (g_cfg.netTest) gate::nettest::run();
+#endif
+                if (g_cfg.saveTest) gate::savetest::run();
+            }
         }
         // cfg `rngfresh` (see g_rngFresh): the first level keeps the seeds it found and
         // saves them; every later level of the same game starts from those values again.
@@ -231,10 +244,84 @@ class $modify(PlayLayer) {
         return PlayLayer::init(level, useReplay, dontCreateObjects);
     }
 
-    void onQuit() {
-        leaveLevelCleanup("level_exit", "level exit");
-        PlayLayer::onQuit();
+    // A copy of the level slice, in a run that takes coins, builds its objects under the type of
+    // the level it was cut from, so that it has that level's secret coins (level_slice.hpp,
+    // buildsAsLevel). The type goes back before the finish, which the last batch calls.
+    void processCreateObjectsFromSetup() {
+        GJGameLevel* lv = m_level;
+        if (levelslice::g_heldType >= 0 || !levelslice::buildsAsLevel(lv)) {
+            PlayLayer::processCreateObjectsFromSetup();
+            return;
+        }
+        levelslice::g_heldType = (int)lv->m_levelType;
+        lv->m_levelType = levelslice::g_orig->m_levelType;
+        PlayLayer::processCreateObjectsFromSetup();
+        if (levelslice::g_heldType >= 0) {   // not the last batch
+            lv->m_levelType = (GJLevelType)levelslice::g_heldType;
+            levelslice::g_heldType = -1;
+        }
     }
+    void createObjectsFromSetupFinished() {
+        const bool held = levelslice::g_heldType >= 0;
+        if (held) {
+            m_level->m_levelType = (GJLevelType)levelslice::g_heldType;
+            levelslice::g_heldType = -1;
+        }
+        PlayLayer::createObjectsFromSetupFinished();
+        if (!levelslice::buildsAsLevel(m_level) || !m_objects) return;
+        long long coins = 0;
+        for (auto* o : CCArrayExt<GameObject*>(m_objects))
+            if (o && (o->m_objectID == 142 || o->m_objectID == 1329)) ++coins;
+        writeResult("slice: the copy has " + std::to_string(coins) + " of the level's "
+                    + std::to_string(levelslice::g_origCoins) + " coin(s)"
+                    + (held ? "" : " (it was not built under the level's type)"));
+    }
+
+    // The layer leaves its scene (the slice swap, the next level of a suite, the way out of a level): the sprites that follow its objects stop their
+    // actions while the objects are still there (stopFollowerActions, helpers_game.hpp). The action manager keeps such a sprite alive past the layer,
+    // and the sprite's call on itself reads the freed object (2.2091, the two-player custom MK2, 2026-10-20).
+    void onExit() {
+        if (g_stopFollowers) {
+            const int nf = stopFollowerActions(this);
+            if (nf) writeResult("followers: " + std::to_string(nf) + " sprite(s) following the level's objects stopped as the layer left its scene");
+        }
+        PlayLayer::onExit();
+    }
+
+    void onQuit() {
+        // Whether a driven session's level is being left, asked BEFORE the cleanup: it tears the
+        // session down (g_started false, g_cfg back to its defaults), and GD's own leave-the-level
+        // code, which runs after it, is what writes the platformer save and commits the play time.
+        const bool drove = g_started;
+        const bool gateSaves = drove && g_cfg.saveBlock;
+        const bool gateTime = drove && g_cfg.progressBlock;
+        const bool saveTestAtQuit = drove && g_cfg.saveTest;   // cfg savetest, asked again at the leave (record_gate.hpp)
+        leaveLevelCleanup("level_exit", "level exit");
+        g_quitDriving = gateSaves;
+        g_quitProgress = gateTime;
+        if (saveTestAtQuit) gate::savetest::run(true);
+        PlayLayer::onQuit();
+        g_quitDriving = false;
+        g_quitProgress = false;
+        if (drove) gate::memaudit::report("after leaving the level");
+    }
+
+#if GEODE_COMP_GD_VERSION >= 22090 && defined(GEODE_IS_WINDOWS)
+    // 2.209 keeps the time spent on a level in its record: the first- and last-played timestamps and two
+    // play-time counters (save keys k138, k139, k142, k143, with k133 marking them valid), written by one
+    // function that destroyPlayer, levelComplete, pauseGame and onQuit all call, and that no test-mode
+    // flag guards. A driven session that dies, pauses or is left would add its seconds to the player's
+    // record. Found by the memory audit (a platformer session showed k133 appear); the function was
+    // then read from the binary. The write is allowed and put straight back (PlayTimeRecord209 in
+    // playlayer_helpers.hpp, which NoRecordGuard uses for destroyPlayer's inline copies) -- the
+    // original keeps its own timer bookkeeping, and only its effect on the record is undone.
+    void commitPlayTime209() {
+        PlayTimeRecord209 rec;
+        if (timeBlockActive()) rec.take(this);
+        PlayLayer::commitPlayTime209();
+        if (rec.putBack()) ++g_progressRestores;
+    }
+#endif
 
     void resetLevel() {
         // A person has the input (mod/takeover.hpp): whatever asked for this reset -- GD after a
@@ -257,7 +344,7 @@ class $modify(PlayLayer) {
         // of ms and mixing up the recordings too.
         if (secsolve::g_active) {
             PlayLayer::resetLevel();
-            // cfg singlereset: the loop's next flight resets again straight after the search's last one.
+            // The loop's next flight resets again straight after the search's last one.
             g_resetMarkLayer = this;
             g_resetMarkPc = g_pcCalls;
             rngFixAfterReset(this); restoreProgress(); return;
@@ -344,7 +431,7 @@ class $modify(PlayLayer) {
             g_tick = 0;
             g_gameFrame = 0;   // rotation does not carry across attempts
             anchors::onAttemptStart();   // the re-anchor record is per attempt
-            padseed::reset();            // ...and so are the pads it seeds (cfg dpspentpad)
+            padseed::reset();            // ...and so are the pads it seeds (dp --spentpad)
             ringseed::reset();           // ...and the rings (dp --spentorb)
             // ...and the gravity portals and touch triggers (cfg portalpayload / touchpayload).
             // Kept per level, their first-wins ticks came from whichever attempt got there
@@ -381,6 +468,12 @@ class $modify(PlayLayer) {
                 if (grouptrace::owns(this)) grouptrace::restart();
                 else grouptrace::build(this);
             }
+            // The flights whose recording nothing reads write none (cfg sliceverifyrec, level_slice.hpp
+            // flightUnrecorded): a check flight on the level itself, and the showing of a solution. Decided
+            // here, at the reset the flight starts from, and kept to its end (the phase changes only after).
+            levelslice::g_heldFlight = g_started && g_cfg.dpSolve && !g_dpShowSolution
+                                       && levelslice::flightUnrecorded();
+            grouptrace::g_hold = levelslice::g_heldFlight || (g_started && g_cfg.dpSolve && g_dpShowSolution);
             // Latch what KIND of attempt this is while the answer is still true. The recorder can
             // retire mid-attempt (its tick budget), and levelComplete asks afterwards -- see the
             // note on g_recordAttempt.
@@ -419,6 +512,7 @@ class $modify(PlayLayer) {
                 if (g_cfg.dpSelfTest) dpSelfTest(this);
                 // Stage B: solve this level in-process, then replay what comes back
                 if (g_cfg.dpSolve) dpsolve::start(this);
+                solver::forgetObjRectsText();   // the table buildPois kept for the start above, if it did not take it
                 writeResult("pois: " + std::to_string(solver::g_pois.size()) + " orbs, "
                     + std::to_string(solver::g_coins.size()) + " coins");
             }
@@ -468,16 +562,16 @@ class $modify(PlayLayer) {
         struct ResetLogAfter { std::function<void(const char*, const char*)> f; const char* k; ~ResetLogAfter() { f("after", k); } };
         std::unique_ptr<ResetLogAfter> resetLogAfter;
         if (g_cfg.resetLog) resetLogAfter.reset(new ResetLogAfter{resetLogLine, resetKind});
-        // cfg singlereset: no physics has run on this layer since its last reset, so the level is
+        // No physics has run on this layer since its last reset, so the level is
         // already as a reset leaves it; a second reset would count a persistent item twice and lose the
-        // start triggers (see g_cfg.singleReset).
-        if (g_cfg.singleReset && g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting
+        // start triggers.
+        if (g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting
             && !takeover::g_restoring && g_resetMarkLayer == this && g_resetMarkPc == g_pcCalls) {
             ++g_resetsSkipped;
             if (g_resetsSkipped <= 5)
                 writeResult("singlereset: reset skipped at attempt " + std::to_string(g_attempt) + " (no physics since the last one)");
         } else {
-            if (g_cfg.singleReset && g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting && !takeover::g_restoring && m_effectManager) {
+            if (g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting && !takeover::g_restoring && m_effectManager) {
                 // A head reset that follows a checkpoint flight starts from the spawn bookkeeping the
                 // flight left (measured on a custom level at the start Item Compare: m_spawnTuples 2 and
                 // m_spawnTriggerActions 0 where a clean reset has 1 and 1), and the reset does not clear it:
@@ -491,13 +585,17 @@ class $modify(PlayLayer) {
             if (g_cfg.persistWorld >= 0 && g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting
                 && !takeover::g_restoring && m_effectManager)
                 persistWorldApply(m_effectManager);
+            // cfg windowguard: a window moved since the level started goes back before the attempt (window_guard.hpp)
+            if (g_cfg.windowGuard && g_started && !g_sessionOver && !ckptRestore && !cpflight::g_starting
+                && !takeover::g_restoring)
+                windowguard::enforce("attempt", false, [](const std::string& s) { writeResult(s); });
             PlayLayer::resetLevel();
             g_resetMarkLayer = this;
             g_resetMarkPc = g_pcCalls;
-            // cfg headbandfresh: the band's top that checkCollisions keeps from its last pass (layer+0x764,
+            // The band's top that checkCollisions keeps from its last pass (layer+0x764,
             // m_gameState+0x5bc; read at 0x213c4f as getMaxPortalY() minus it) starts at a fresh layer's 0, so every
-            // head flight's first pass sees the band move as a fresh attempt's does (g_cfg.headBandFresh).
-            if (g_cfg.headBandFresh && !ckptRestore && !cpflight::g_starting && !takeover::g_restoring) {
+            // head flight's first pass sees the band move as a fresh attempt's does.
+            if (!ckptRestore && !cpflight::g_starting && !takeover::g_restoring) {
                 char* lb = reinterpret_cast<char*>(static_cast<GJBaseGameLayer*>(this));
                 char* gs = reinterpret_cast<char*>(&this->m_gameState);
                 static int s_hb = 0;
@@ -691,17 +789,41 @@ class $modify(PlayLayer) {
     // resetLevel, which runs ~1 s after death) makes it depend on polling timing whether the
     // reader grabs the current attempt or the previous one. rows=0 means "_last was not
     // updated"
-    void rollGroupTrace() {
+    void rollGroupTrace(bool death = false) {
         if (!grouptrace::g_on) return;
         // cfg cpflightprobe: the recordings of the probe and its control stay in grouptrace.txt, where
         // the control's end compares them; grouptrace_last.txt stays the loop's.
         if (cpflight::g_probeFlying || cpflight::g_controlFlying) return;
+        // cfg gtdeathrow: the dying tick's row (the dump's dead row, g_tick + 1), written here because the
+        // per-tick hook writes it only after this roll, into the next attempt's file. The rows are the ones
+        // destroyPlayer captured before GD's own call (an On Death trigger switches groups inside it).
+        long long end = g_tick;
+        if (death && g_cfg.gtDeathRow && grouptrace::g_deathRowsT == g_tick + 1) {
+            end = g_tick + 1;
+            grouptrace::commitRows(grouptrace::g_deathRows, end);
+        }
+        grouptrace::g_deathRowsT = -1;
+        grouptrace::g_deathRows.clear();
         // g_tick, not the recording's last row: see roll's `endTick`
-        auto r = grouptrace::roll(g_tick);
+        const auto rollT0 = std::chrono::steady_clock::now();
+        auto r = grouptrace::roll(end);
+        const double rollMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - rollT0).count();
         writeResult("gt_last: attempt=" + std::to_string(g_attempt)
             + " rows=" + std::to_string(r.rows)
             + " depth=" + std::to_string(r.depth)
-            + " end=" + std::to_string(g_tick));
+            + " end=" + std::to_string(end));
+        // cfg profsample: what the recording cost this run -- tick() calls and their wall time, the roll itself
+        if (itermap::g_profSample) {
+            char b[200];
+            snprintf(b, sizeof(b), "gttime: attempt=%d ticks=%lld tickms=%.0f tickmcyc=%.0f rollms=%.0f rows=%lld",
+                     (int)g_attempt, grouptrace::g_tickCalls, grouptrace::g_tickNanos / 1e6,
+                     (double)grouptrace::g_tickCycles / 1e6, rollMs, r.rows);
+            writeResult(b);
+        }
+        grouptrace::g_tickNanos = 0;
+        grouptrace::g_tickCycles = 0;
+        grouptrace::g_tickCalls = 0;
     }
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
@@ -746,8 +868,11 @@ class $modify(PlayLayer) {
         // session-end `anticheat:` line) and not written. Nothing else changes:
         // the call still goes wherever it went before.
         const bool anticheat = object && object == m_anticheatSpike;
+        // cfg nodeath: 1 swallows every body's death, 2 only player 1's, 3 only player 2's (config.hpp noDeathCode)
+        const bool swallowBody = g_cfg.noDeath || (g_cfg.noDeathCode == 2 && player && player == m_player1)
+                                 || (g_cfg.noDeathCode == 3 && player && player == m_player2);
         if (anticheat) ++solver::g_anticheatCalls;
-        if ((g_cfg.hitboxTrace || g_cfg.dpSolve) && g_started && !g_sessionOver
+        if ((g_cfg.hitboxTrace || g_cfg.dpSolve || g_cfg.noDeathCode != 0) && g_started && !g_sessionOver
             && player && !anticheat) {
             char kb[240];
             snprintf(kb, sizeof(kb),
@@ -788,7 +913,7 @@ class $modify(PlayLayer) {
             // went from alive to dead -- the same transition the gatetrace
             // `killer:` line below waits for.
             if (g_cfg.killerSite && !player->m_isDead && !secsolve::g_noKill
-                && !secsolve::g_active && !g_cfg.noDeath) {
+                && !secsolve::g_active && !swallowBody) {
 #ifdef GEODE_IS_WINDOWS
                 static uintptr_t base = 0, size = 0;
                 if (!base) {
@@ -862,8 +987,8 @@ class $modify(PlayLayer) {
         // every substep it is hit checkCollisions returns before postCollision. Measured with lv16's
         // solution, nodeath=1 against nodeath=0: 18,867 spike calls against 13, and the trajectory
         // apart from t=3,078. So those paths do for the spike what GD does, and nothing more
-        // (cfg anticheatpass, on). Not a death either way.
-        if (anticheat && g_cfg.antiCheatPass && (secsolve::g_noKill || g_cfg.noDeath)) {
+        // (the anti-cheat pass). Not a death either way.
+        if (anticheat && (secsolve::g_noKill || swallowBody)) {
             if (!(m_player1 && m_player1->m_isLocked) && !m_playerDied) m_damageVerified = true;
             return;
         }
@@ -880,7 +1005,7 @@ class $modify(PlayLayer) {
         stallwatch::Mark sm(stallwatch::DESTROY);
         // Observation-only no-death (cfg `nodeath=1`). Hitboxes stay active, so portals and
         // triggers fire normally and the recording reaches the end in a single run
-        if (g_cfg.noDeath) return;
+        if (swallowBody) return;
         // Count which player a death in a dual section came from (diagnostic).
         // COUNTED AFTER THE ORIGINAL CALL, for the same reason the killer: line
         // below is written there: `!wasDead` alone counts every destroyPlayer GD
@@ -890,6 +1015,16 @@ class $modify(PlayLayer) {
         // population "destroyPlayer was called", not "the player died" -- the
         // defect the killer: line had until 3576515, left behind in the counter.
         bool wasDead = player->m_isDead;
+        // cfg gtdeathrow: the dying tick's rows, taken before GD's call changes anything (grouptrace::captureRows)
+        grouptrace::g_deathRowsT = -1;
+        // ...in an unturned frame only: inside a rotated-gameplay section the rects read here are not the ones the
+        // tick ends with (lv22 t=11,513, frame 3: block uid6271 read at (16146.4, 706.0) where GD's own collision
+        // trace has it at rest at (16155, 735), so the model saw it move off the cube GD crushed against it)
+        if (g_cfg.gtDeathRow && !wasDead && grouptrace::g_on && g_started && !g_sessionOver
+            && !secsolve::g_active && g_gameFrame == 0) {
+            grouptrace::g_deathRows = grouptrace::captureRows(g_tick + 1);
+            grouptrace::g_deathRowsT = g_tick + 1;
+        }
         // Direct evidence of what killed the player (only while measuring gatetrace).
         // The line is BUILT here, before the original call, because px/py move inside
         // it -- and WRITTEN after it, only for a call that actually put the player in
@@ -974,7 +1109,7 @@ class $modify(PlayLayer) {
                 double speed = ms > 0 ? (g_tick / 240.0) / (ms / 1000.0) : 0;
                 // Finalise the recordings BEFORE `death:`: the reader learns the end of the
                 // run from this line and reads dump.csv / grouptrace_last.txt right after
-                rollGroupTrace();
+                rollGroupTrace(true);
                 flushAll();
                 cpflight::noteEnd(g_tick);   // the flight's work, by kind (cpflight summary)
                 cpflight::objLine(this, "death", g_tick);   // cfg cpflightobj (print only)
@@ -988,7 +1123,10 @@ class $modify(PlayLayer) {
                 if (takeover::personDriving()) takeover::died(g_tick, pos.x);
                 // ...and the plan dying before the point would fly the same death again on every
                 // attempt: said once, and the session ends.
-                else if (takeover::approaching()) takeover::diedBeforePoint(g_tick, pos.x);
+                // (A session armed by the key alone has no point to miss: it is an ordinary replay
+                // until the key is pressed, and its death is the replay's.)
+                else if (takeover::approaching() && !takeover::keyOnly())
+                    takeover::diedBeforePoint(g_tick, pos.x);
                 if (g_serveMode) g_serveWait = true;  // stop at the start of the next attempt
                 // A rung's prefix that died before the head it was replaying to (session.hpp
                 // g_secRungPrefixFails). Given up after a second such attempt, and then this death
@@ -1352,6 +1490,7 @@ class $modify(PlayLayer) {
 // level -- g_started stayed set, so botDriving() kept the next level's record from being saved.
 // Not PlayLayer::onExit: a level slice swaps the layer mid-session, and onExit runs then too.
 class $modify(PauseLayer) {
+    GDSOLVER_HOOK_GUARD()
     void goEdit() {
         leaveLevelCleanup("editor_exit", "editor exit");
         PauseLayer::goEdit();
@@ -1359,6 +1498,7 @@ class $modify(PauseLayer) {
 };
 
 class $modify(EndLevelLayer) {
+    GDSOLVER_HOOK_GUARD()
     void goEdit() {
         leaveLevelCleanup("editor_exit", "editor exit");
         EndLevelLayer::goEdit();

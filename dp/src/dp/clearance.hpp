@@ -185,6 +185,31 @@ inline bool tightHere(const std::vector<const Obj*>& near, double px, double py,
     return false;
 }
 
+// --wavetidy: how far a wave at (px, py) sits from the middle of the corridor it is flying, 0 at the middle and 1 at
+// a wall. The corridor is bounded below by the band's floor (+ the seat) and the highest solid top under it, above by
+// the band's ceiling (- the seat) and the lowest solid bottom over it; only solids whose x span the wave's box
+// overlaps count, and ramps are not asked. No corridor (a gap narrower than the box) reads as 1.
+inline double waveOffCentre(const std::vector<const Obj*>& near, double px, double py, double half,
+                            double bandFloor, double bandCeil, double seat) {
+    double lo = std::max(bandFloor, 0.0) + seat;
+    double hi = bandCeil < 1e8 ? bandCeil - seat : 1e18;
+    const double pl = px - half, pr = px + half;
+    for (const Obj* o : near) {
+        if (o->type != 0 || o->slope || o->oriented || o->oneway) continue;
+        if (o->cx + o->hw <= pl || o->cx - o->hw >= pr) continue;
+        const double b = o->cy - o->hh, t = o->cy + o->hh;
+        if (t <= py) lo = std::max(lo, t + half);
+        else if (b >= py) hi = std::min(hi, b - half);
+    }
+    if (hi >= 1e17) {   // open above: 150 px clear of the floor or solid under it is as roomy as it gets
+        const double r = 1.0 - (py - lo) / 150.0;
+        return r < 0.0 ? 0.0 : (r > 1.0 ? 1.0 : r);
+    }
+    if (hi - lo < 1e-6) return 1.0;
+    const double off = std::fabs(py - 0.5 * (lo + hi)) / (0.5 * (hi - lo));
+    return off > 1.0 ? 1.0 : off;
+}
+
 // Lower is roomier. Ties keep the incumbent, so with the score off (every
 // `tight` still 0) this is exactly "the first accepted ordinal wins" -- the rule
 // that is there today, which is how the flag-off path stays bit-identical.

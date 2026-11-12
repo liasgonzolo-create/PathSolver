@@ -50,10 +50,9 @@ was on the tick before the game's death row (within 0.3 px in y and 0.3 px/tick 
 bodies) and dies on the tick after it, which is when the model reports the same event. The model
 was right there. The round died because the search sent a plan that dies — its own `[SOLVED]` line
 often says so already (`resimdie=`) — and the loop flies such plans on purpose, since flying them
-is how the ladder gets past a stretch. It is counted apart: when there are fixups, the map's
-second line reads `fixups: M where the model was wrong, S a search sent (same death)`. On official
-lv11 with coins, four of the
-run's seven fixups are grey.
+is how the ladder gets past a stretch. It is counted apart: when there are any, the readout's
+totals say `14 fixups (2 search)`, the 2 being the grey ones. On official lv11 with coins, four of
+the run's seven fixups are grey.
 
 The test compares the state and the tick, not the object that killed. On one official run without
 coins, 35 of the 38 grey records where the game named its killer had the model die on the same
@@ -76,6 +75,13 @@ Ten deaths in one place mean opposite things depending on this. It is the differ
 loop working through a hard section and the loop stuck against a wall.
 
 ![How the loop scored each round, and the colour it draws that death in](img/itermap-kinds.svg)
+
+The readout over the bar is three lines, no wider than the bar: where you are and what the map says
+about that spot, the run's totals, and a key. In the key each word is written in the colour of the
+mark it names, for the deaths (the five kinds above), the fixups (amber *model*, magenta *kill*,
+grey *search*) and the veto, with a `|` between the three groups. The kind named in the lines above
+it is coloured the same way. A fourth line, between the totals and the key, appears only when the
+map has something to say about itself: `[in progress]`, `[not cleared]`, `[no tails]`.
 
 Two of them are worth spelling out. **followed** exists because rewinding onto a branch the model
 already knows dies is worse than following one it believes in; the loop gives such a branch four
@@ -131,7 +137,7 @@ is the fidelity hole, and the place to fix it is exactly where the pillar stands
 A solve draws the map by default, from the rounds the loop has recorded so far — so a run's pillars
 appear as it produces them rather than only in the file afterwards. That is the session the map is
 worth watching in, which is why it is the one that does not wait to be asked. A solve turns the
-screen off for speed; `F5` turns it back on. The summary then reads `[in progress]`, and the bar is
+screen off for speed; `F5` turns it back on. The readout then carries an `[in progress]` line, and the bar is
 a picture with no transport in it: the level belongs to the loop while it works, so seeking and
 frame-stepping are refused until the solution is being shown.
 
@@ -164,7 +170,7 @@ model was wrong, is exact either way.
 **They have no tails.** A tail is a point every eight ticks and the log holds one line per round,
 so the trajectories were never written down and cannot be recovered from it — only a run recording
 as it goes has them. A map rebuilt from a log shows deaths, columns and fixups but no fan. The
-overlay says `[no tails in this map]` rather
+overlay says `[no tails]` rather
 than drawing nothing without explanation; re-solve the level to get one with tails.
 
 To watch a replay with the map already on:
@@ -172,6 +178,8 @@ To watch a replay with the map already on:
 ```bash
 python py/watch_plan_replay.py --level 22 --itermap
 ```
+
+It leaves every other game running; add `--kill-others` to stop them first when nothing else is going.
 
 ## The file
 

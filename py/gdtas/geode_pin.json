@@ -1,0 +1,9 @@
+{
+  "version": "v5.11.2",
+  "files": {
+    "Geode.dll": "0c34f50454c102637038cae48c8c7dd685da3582fe474358024b1eb6833684d3",
+    "GeodeUpdater.exe": "2f8c1343aed63bed3d3ac06886d2b27aed506b5b17bfa5999a2cb004a35ff5a2",
+    "XInput1_4.dll": "20d6f0ac61ec820895ff25bc26558ddb877f37cc939d303257099ad5fc51e76c"
+  },
+  "note": "The Geode loader the workers run (see gdtas/gdbase.py). Changing it means updating every idle worker first."
+}

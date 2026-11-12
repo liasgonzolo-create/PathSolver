@@ -35,6 +35,27 @@ KILLER = "killer:"
 GT_LAST = "gt_last:"
 COIN_COMPLETE = "coin: level complete"
 
+# The line the mod writes while it is still ending a session: the screen is given back, and the
+# solver's memory, the checkpoint flights and the rest are let go after it (session_end: below).
+SESSION_END_NOT_YET = "session_end: rendering restored"
+
+
+def marker_line_seen(marker: str, text: str) -> bool:
+    """Whether a COMPLETE line of `text` begins with `marker`, the launch's end marker.
+
+    A substring test is wrong for `session_end`: the mod's `fxcensus[session_end]` line is written
+    some forty lines before the session's last, and the work between them (letting go of the
+    solver's caches, a gigabyte on a large level) can take longer than the one-second poll. A
+    reader that stops the game on the substring stops it mid-teardown -- exit code 1 and no
+    `session_end:` line, which a cleared level was then filed as "crash:0x00000001 before
+    session_end" (2026-10-17, two cold runs and a third in the lab). The final line is the one
+    that starts with the marker, and `session_end: rendering restored` is not it.
+    """
+    for line in text.split("\n"):
+        if line.startswith(marker) and not line.startswith(SESSION_END_NOT_YET):
+            return True
+    return False
+
 # Threshold on GD's own progress percentage. levelComplete is called mid-level too, so
 # `level_complete` on its own is not evidence.
 #
@@ -57,6 +78,11 @@ CLEAR_MARGIN_X = 400.0
 # this way (seqify.replay with the run's dpsolve=1, 10-09).
 NODEATH_PASS = ("dpsolve: recording what the level does on its own",
                 "dpsolve: no anchor left - re-recording the moving geometry")
+# ...and the third arm of the mod's rule (cfg dpendtrigclear, on by the user's ruling of 2026-09-24, "an End
+# trigger is a clear"): a completion is accepted wherever it happens when an End trigger (3600) fired in the same
+# attempt. The mod's EndTriggerGameObject::triggerObject hook writes this line once per attempt, before the
+# `complete:` it brings about. The fire is the condition, not the trigger's presence in the level.
+END_TRIGGER = "endtrigger: uid "
 
 
 def read_lines(path: Path | str) -> list[str]:
@@ -178,20 +204,32 @@ def clear_verdict(lines: list[str], pct_floor: float = PCT_FLOOR) -> tuple[bool,
     A `complete:` that ends one of the mod's nodeath passes (NODEATH_PASS: the first death/complete after its
     line) is not a clear and is passed over; when it is the only one, the verdict says so. `step=` is no marker
     of that: it is GD's m_currentStep, and genuine clears print 0 as well.
+
+    The mod applies a third arm too (END_TRIGGER): a completion in an attempt where an End trigger fired is a
+    clear wherever it happens -- a custom level ends at x=8,489 of 13,025 (65%) through its End trigger, which
+    the mod filed as the solution and this verdict refused. The fire counts for the attempt it is in only: a
+    death or a complete ends it, and a nodeath pass's own fire is passed over with the pass.
     """
     cl = None
     nodeath, passed = False, []
+    endtrig = None   # the End trigger line of the attempt in progress
     for l in lines:
         if l.startswith(NODEATH_PASS):
             nodeath = True
+            endtrig = None
+            continue
+        if l.startswith(END_TRIGGER):
+            endtrig = l
             continue
         if l.startswith(DEATH):
             nodeath = False
+            endtrig = None
             continue
         if l.startswith(COMPLETE) and "levelMaxX=" in l:
             if nodeath:
                 passed.append(l)
                 nodeath = False
+                endtrig = None
                 continue
             cl = l
             break
@@ -207,6 +245,8 @@ def clear_verdict(lines: list[str], pct_floor: float = PCT_FLOOR) -> tuple[bool,
         near = goal and goal > 1.0 and (goal - c["x"]) <= CLEAR_MARGIN_X
         if c["pct"] >= pct_floor or near:
             return True, first(lines, COIN_COMPLETE) or cl
+        if endtrig is not None:
+            return True, f"END TRIGGER CLEAR pct={c['pct']} x={int(c['x'])} ({endtrig})"
         return False, f"MID-LEVEL COMPLETE pct={c['pct']} x={int(c['x'])}"
     # Fall back to x only for old MODs that do not emit pct. This 100 is a value for
     # "the x read after the end-of-level suck-in", and cannot be reused for the guard

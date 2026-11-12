@@ -23,9 +23,11 @@
 // give-up, because a run that did NOT clear is the one whose map is worth reading. It is also
 // producible after the fact from a run's log (py/itermap_from_log.py), so the maps of every run
 // already on disk exist without re-solving anything.
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <vector>
 
 #include "mod/config.hpp"
 
@@ -157,6 +159,12 @@ inline int g_generation = 0;
 // bool cannot tell those apart -- a solve would either override a choice the operator had just
 // made, or never get its own default.
 inline int g_mapPref = -1;
+// Test hook (cfg `f10auto`): seconds after the showing starts at which the mod presses F10 itself. Outside g_cfg, which a play
+// menu Start resets, so the list survives a session set up by the menu.
+inline std::vector<double> g_f10Auto;
+// Test hook (cfg `panelmouse`): triples (seconds after the replay panel first shows, bar fraction at which a press lands, bar fraction it is
+// dragged to before the release or -1 for a click). The panel presses its own bar through the same handlers a touch reaches.
+inline std::vector<double> g_panelMouseAuto;
 
 // [2026-08-28, user direction] A SOLVE SHOWS IT BY DEFAULT. That is the session where the map is
 // the thing worth watching: the marks appear as the loop produces them, and a run's walls are
@@ -769,6 +777,29 @@ inline cocos2d::ccColor4F kindColor(int k, float a) {
     }
 }
 
+// A fixup is one of three things, and the three colours are shared by the marks in the world, the
+// bar's top row and the readout's key.
+enum FixupKind { FixModel = 0, FixKill = 1, FixSearch = 2, FixCount = 3 };
+inline int fixupKind(const Fixup& x) { return x.sameDeath ? FixSearch : x.kill ? FixKill : FixModel; }
+inline const char* fixupName(int k) {
+    return k == FixSearch ? "search" : k == FixKill ? "kill" : "model";
+}
+inline cocos2d::ccColor4F fixupColor(int k, float a) {
+    switch (k) {
+        case FixSearch: return {0.70f, 0.70f, 0.70f, a};   // grey: a plan the search sent, same death
+        case FixKill:   return {1.00f, 0.35f, 0.85f, a};   // magenta: GD ends the run at this state
+        default:        return {1.00f, 0.80f, 0.20f, a};   // amber: the model was wrong here
+    }
+}
+// The veto is a wash over the level (alpha 0.10 in drawWorld), so its own colour is too dark to read
+// as text; the key spells it with a lighter purple of the same hue.
+inline cocos2d::ccColor4F vetoColor(float a) { return {0.55f, 0.15f, 0.65f, a}; }
+constexpr cocos2d::ccColor3B kVetoText{190, 100, 230};
+
+inline cocos2d::ccColor3B textRgb(const cocos2d::ccColor4F& c) {
+    return {(GLubyte)(c.r * 255.f), (GLubyte)(c.g * 255.f), (GLubyte)(c.b * 255.f)};
+}
+
 // Fetch or create one of our draw nodes. Looked up by tag every time and never cached in a raw
 // pointer -- the same rule the HUD labels follow, and for the same reason: a scene rebuild frees
 // the node while a cached pointer keeps pointing at it.
@@ -797,6 +828,85 @@ inline void fillRect(cocos2d::CCDrawNode* n, float x0, float y0, float x1, float
     n->drawPolygon(v, 4, c, 0.f, ccColor4F{0.f, 0.f, 0.f, 0.f});
 }
 
+// EVERY NODE drawWorld HAS MADE, held by reference, whatever layer it was made for.
+//
+// The marks used to be found again by tag under pl->m_objectLayer, so a hide reached exactly one node: the one under the
+// layer the game was holding at THAT FRAME. A node left on any other layer -- the level entered again, the scene swapped, no
+// PlayLayer at the moment of the hide (hud.hpp passes PlayLayer::get(), not the layer the overlay is running in) -- was never
+// emptied, and the strip and the readout (which hang off the overlay node and are redrawn from nothing every frame) went
+// while the path stayed (reported after F10, 2026-10-17, on 2.2081 and before). Held by Ref, so that a layer the game has
+// let go of cannot leave a pointer here that answers "same layer" for a new one at the same address.
+inline std::vector<geode::Ref<cocos2d::CCDrawNode>> g_worldDraw;
+inline std::vector<geode::Ref<cocos2d::CCNode>> g_worldCounts;
+
+// How many of the map's nodes the running scene holds, looked for the way a person would: by tag, a few levels down, and
+// not inside a node with hundreds of children (the batch nodes of the level's own objects). The check on "hidden is gone".
+inline size_t worldNodesInScene() {
+    using namespace cocos2d;
+    size_t found = 0;
+    auto* scene = CCDirector::sharedDirector()->getRunningScene();
+    if (!scene) return 0;
+    std::vector<std::pair<CCNode*, int>> todo{{scene, 0}};
+    while (!todo.empty()) {
+        const auto [node, depth] = todo.back();
+        todo.pop_back();
+        auto* kids = node->getChildren();
+        if (!kids || kids->count() >= 256 || depth >= 6) continue;
+        for (unsigned i = 0; i < kids->count(); ++i) {
+            auto* k = static_cast<CCNode*>(kids->objectAtIndex(i));
+            if (!k) continue;
+            if (k->getTag() == WORLD_TAG || k->getTag() == COUNT_TAG) ++found;
+            todo.push_back({k, depth + 1});
+        }
+    }
+    return found;
+}
+
+struct WorldHide { size_t held = 0, detached = 0, foreign = 0; };
+
+// Every node the map has made, off the screen: emptied, hidden and taken out of its parent, on whatever layer it is. `current`
+// is the layer the game holds now (null if none); a node found on any other layer is the stale kind this exists for.
+inline WorldHide hideWorldAll(cocos2d::CCNode* current) {
+    WorldHide r;
+    auto take = [&](cocos2d::CCNode* n) {
+        ++r.held;
+        n->setVisible(false);
+        if (auto* p = n->getParent()) {
+            if (p != current) ++r.foreign;
+            n->removeFromParentAndCleanup(true);
+            ++r.detached;
+        }
+    };
+    for (auto& d : g_worldDraw)
+        if (auto* n = d.data()) { n->clear(); take(n); }
+    for (auto& c : g_worldCounts)
+        if (auto* n = c.data()) { n->removeAllChildrenWithCleanup(true); take(n); }
+    g_worldDraw.clear();
+    g_worldCounts.clear();
+    return r;
+}
+
+// The map's nodes that are not on `layer` -- a layer the game has let go of, or a node something took out of its parent --
+// are dropped before a map is drawn on `layer`, so that the one drawn there is the only one. Returns how many.
+inline size_t dropWorldElsewhere(cocos2d::CCNode* layer) {
+    size_t gone = 0;
+    for (size_t i = 0; i < g_worldDraw.size();) {
+        auto* n = g_worldDraw[i].data();
+        if (n && n->getParent() == layer) { ++i; continue; }
+        if (n) { n->clear(); n->setVisible(false); if (n->getParent()) n->removeFromParentAndCleanup(true); }
+        g_worldDraw.erase(g_worldDraw.begin() + (long)i);
+        ++gone;
+    }
+    for (size_t i = 0; i < g_worldCounts.size();) {
+        auto* n = g_worldCounts[i].data();
+        if (n && n->getParent() == layer) { ++i; continue; }
+        if (n) { n->removeAllChildrenWithCleanup(true); n->setVisible(false); if (n->getParent()) n->removeFromParentAndCleanup(true); }
+        g_worldCounts.erase(g_worldCounts.begin() + (long)i);
+        ++gone;
+    }
+    return gone;
+}
+
 // The marks, in the level's own coordinates. Parented to the object layer, so they pan, zoom and
 // rotate with the world exactly as the level does -- which is the only way a mark at x=3,497 is
 // still at x=3,497 inside lv22's rotated shaft.
@@ -805,12 +915,45 @@ inline void fillRect(cocos2d::CCDrawNode* n, float x0, float y0, float x1, float
 // nothing to draw and are not worth re-emitting every frame.
 inline void drawWorld(cocos2d::CCNode* objectLayer) {
     using namespace cocos2d;
+    // The generation covers content. A node made fresh (a new layer, a hide before it) is rebuilt whatever the generation says,
+    // which is what the parent pointer that used to stand here was for -- and a raw pointer compared across layers answers
+    // "same" for a new layer at a freed one's address.
+    static int s_gen = -1;
+    if (!mapVisible()) {
+        // HIDDEN IS EMPTY, AND IT IS EVERYWHERE. The map's marks are one draw node's primitives and a node of labels, and what
+        // took them off the screen was setVisible and nothing else: a path tail left drawn in a node that is meant to be hidden
+        // is one visibility call away from staying on screen (reported after F10, 2026-10-17: the strip and the readout, which
+        // are redrawn from nothing every frame, went; the path overlay did not). So the nodes are emptied and taken off --
+        // every one this map has made, on whatever layer (g_worldDraw), whether or not the game holds a layer right now.
+        // The next show makes them again (F10 bumps the generation as well).
+        if (!g_worldDraw.empty() || !g_worldCounts.empty()) {
+            const size_t drawN = g_worldDraw.size(), countN = g_worldCounts.size();
+            const WorldHide h = hideWorldAll(objectLayer);
+            s_gen = -1;
+            char b[256];
+            snprintf(b, sizeof(b),
+                     "itermap: world hidden - held %zu (%zu draw, %zu counts), detached %zu, %zu not on the current layer; held now %zu, in the scene %zu",
+                     h.held, drawN, countN, h.detached, h.foreign, g_worldDraw.size() + g_worldCounts.size(),
+                     worldNodesInScene());
+            writeResult(b);
+        }
+        return;
+    }
     if (!objectLayer) return;
+    // Anything of ours on another layer goes before a map is drawn on this one.
+    if (const size_t gone = dropWorldElsewhere(objectLayer)) {
+        s_gen = -1;
+        writeResult("itermap: world - " + std::to_string(gone) + " node(s) of the map were not on the current layer and were taken off");
+    }
+    const bool hadDraw = objectLayer->getChildByTag(WORLD_TAG) != nullptr;
     auto* n = drawNode(objectLayer, WORLD_TAG, "itermap-world"_spr, 1 << 20);
     if (!n) return;
+    if (std::none_of(g_worldDraw.begin(), g_worldDraw.end(), [n](const geode::Ref<CCDrawNode>& r) { return r.data() == n; }))
+        g_worldDraw.emplace_back(n);
     // The counts hang off a plain node beside the draw node: a CCDrawNode cannot hold text, and
     // the two have to appear and disappear together.
     auto* counts = objectLayer->getChildByTag(COUNT_TAG);
+    const bool hadCounts = counts != nullptr;
     if (!counts) {
         counts = CCNode::create();
         if (!counts) return;
@@ -819,23 +962,19 @@ inline void drawWorld(cocos2d::CCNode* objectLayer) {
         counts->setZOrder((1 << 20) + 1);
         objectLayer->addChild(counts);
     }
-    n->setVisible(mapVisible());
-    counts->setVisible(mapVisible());
-    if (!mapVisible()) return;
-    // The generation covers content; the parent is compared separately so that re-entering a
-    // level (a fresh object layer, a fresh node) redraws even though the map is unchanged.
+    if (std::none_of(g_worldCounts.begin(), g_worldCounts.end(), [counts](const geode::Ref<CCNode>& r) { return r.data() == counts; }))
+        g_worldCounts.emplace_back(counts);
+    n->setVisible(true);
+    counts->setVisible(true);
     std::lock_guard<std::mutex> lk(g_mu);
-    static int s_gen = -1;
-    static CCNode* s_parent = nullptr;
-    if (s_gen == g_generation && s_parent == objectLayer) return;
+    if (hadDraw && hadCounts && s_gen == g_generation) return;
     s_gen = g_generation;
-    s_parent = objectLayer;
     rebuildHotLocked();
     n->clear();
     counts->removeAllChildrenWithCleanup(true);
     // 1. the veto boxes, underneath everything: stretches the loop ruled out as routes
     for (const Veto& v : g_vetoes)
-        fillRect(n, v.x0, -300.f, v.x1, 3200.f, ccColor4F{0.55f, 0.15f, 0.65f, 0.10f});
+        fillRect(n, v.x0, -300.f, v.x1, 3200.f, vetoColor(0.10f));
     // 2. the columns. Alpha is the share of the run's worst bucket, so the picture answers "where
     //    did the rounds go" at a glance instead of "was anything ever wrong here"
     for (const Hot& h : g_hot) {
@@ -875,11 +1014,10 @@ inline void drawWorld(cocos2d::CCNode* objectLayer) {
     //    and on a level whose wall is really a fidelity hole they sit hundreds of pixels apart.
     //    Grey: a kill record for a death the model dies too (Fixup::sameDeath) -- the search sent
     //    that plan, the model was not wrong there.
+    static const float kFixA[FixCount] = {0.75f, 0.85f, 0.70f};   // by FixupKind
     for (const Fixup& x : g_fixups) {
-        const ccColor4F c = x.sameDeath ? ccColor4F{0.70f, 0.70f, 0.70f, 0.70f}
-                            : x.kill    ? ccColor4F{1.00f, 0.35f, 0.85f, 0.85f}
-                                        : ccColor4F{1.00f, 0.80f, 0.20f, 0.75f};
-        n->drawDot({x.x, x.y}, 3.5f, c);
+        const int k = fixupKind(x);
+        n->drawDot({x.x, x.y}, 3.5f, fixupColor(k, kFixA[k]));
     }
     // 5. the deaths themselves, on top, coloured by how the round was scored
     for (const Death& d : g_deaths) {
@@ -1019,7 +1157,15 @@ inline void drawStrip(cocos2d::CCNode* parent) {
     if (!n) return;
     const bool on = stripVisible();
     n->setVisible(on);
-    if (!on) { g_stripW = 0.f; return; }   // not drawn = not clickable
+    // Not drawn = not clickable, and not drawn = empty too: a hide that rests on setVisible alone is one call from a strip
+    // that stays (the same rule as drawWorld's).
+    static bool s_filled = false;
+    if (!on) {
+        if (s_filled) { n->clear(); s_filled = false; }
+        g_stripW = 0.f;
+        return;
+    }
+    s_filled = true;
     const CCRect box = stripBox();
     const float kStripW = box.size.width, kStripH = box.size.height;
     g_stripX = box.origin.x; g_stripY = box.origin.y;
@@ -1039,9 +1185,10 @@ inline void drawStrip(cocos2d::CCNode* parent) {
     // longest line ends -- the label is anchored by its bottom-right corner to the strip's right
     // edge, so the lines grow left and the panel has to follow them.
     if (g_labelH > 0.f) {
+        // ...and drawLabel holds label + padding to the bar's width, so the panel never passes it.
         const float lp = kStripH * 0.25f;
-        fillRect(n, kStripW - g_labelW - lp, kStripH,
-                 kStripW + lp * 0.5f, kStripH + kStripH * 0.25f + g_labelH + lp,
+        fillRect(n, kStripW - g_labelW - 1.5f * lp, kStripH,
+                 kStripW, kStripH + kStripH * 0.25f + g_labelH + lp,
                  ccColor4F{0.f, 0.f, 0.f, 0.78f});
     }
     // the trough
@@ -1083,10 +1230,7 @@ inline void drawStrip(cocos2d::CCNode* parent) {
         // deaths and must not be added into the same bar
         for (const Fixup& x : g_fixups) {
             const float fx = (float)x.tick * st;
-            fillRect(n, fx, kStripH - pad, fx + thin, kStripH,
-                     x.sameDeath ? ccColor4F{0.70f, 0.70f, 0.70f, 0.9f}
-                     : x.kill    ? ccColor4F{1.00f, 0.35f, 0.85f, 0.9f}
-                                 : ccColor4F{1.00f, 0.80f, 0.20f, 0.9f});
+            fillRect(n, fx, kStripH - pad, fx + thin, kStripH, fixupColor(fixupKind(x), 0.9f));
         }
     }
     // Where the drag will land, if one is in progress. Amber and full height so it reads as "this
@@ -1140,13 +1284,55 @@ inline void drawCover(cocos2d::CCNode* parent, bool forward) {
     }
 }
 
-// The text that goes above the strip. Three lines the reader can act on: what the run cost
-// overall and its worst wall, what is under the playhead right now, and what the colours mean --
-// the last one because a picture in five colours with no key is a picture of nothing. The key is
-// spelled out in words rather than drawn as swatches: a CCLabelBMFont takes one colour for the
-// whole string, so the swatches would have to be a fourth draw node kept in step with this text.
-inline void summary(char* out, size_t cap, float px, float levelLen) {
-    if (cap == 0) return;
+// The readout above the strip: three lines, four when the map has something to say about itself, and
+// the last of them is the key.
+//
+//   t=1234 / 5678  x=3497 | 5 deaths (rewound), 3 fixups (1 search), rounds 4-9
+//   62 rounds, 80 deaths, 14 fixups (2 search), worst x=9825 (11 rewound)
+//   [not cleared]  [no tails]                              (only when one of them applies)
+//   deaths: deeper followed forced rewound wedged | fixups: model kill search | veto
+//
+// The first line is where you are and what the map says about that spot; without the map it is just
+// "t=1234 / 5678 (22%)  x=3497". It is one line because the two used to be two (the second began
+// "here x=3497", the same x again), and the seek hint is gone from it: the overlay column already
+// says "or drag the bar". The percentage goes with the map's half, as the playhead shows it.
+//
+// NO WIDER THAN THE BAR. The panel is held to the strip's own width (drawLabel shrinks the text if
+// a line would pass it), so each line is written to fit: about 80 characters, which is what the key
+// takes -- the key sets the size, and so it has no room for a label before "veto".
+//
+// It used to be seven lines, with the colours spelled out as "green deeper / cyan followed / ...".
+// A CCLabelBMFont takes one colour for the whole string, so the words are now written in the
+// colour they name: the key is the only place the marks are explained, and it costs one line. The
+// kind in the first and second lines is coloured the same way. A key that has to be read word by
+// word can be replaced by swatches later (the draw node already holds the same colours), if the
+// coloured words turn out hard to tell apart on a bright level.
+
+// One run of letters in the readout and the colour it is drawn in.
+struct Span {
+    size_t a = 0, b = 0;                          // [a, b) in the string; ASCII, so bytes are letters
+    cocos2d::ccColor3B c{255, 255, 255};
+};
+
+// The readout as built: the string and the colours of the words that name a mark.
+struct Coloured {
+    std::string s;
+    std::vector<Span> spans;
+    void add(const char* t) { s += t; }
+    void add(const char* t, const cocos2d::ccColor3B& c) {
+        const size_t a = s.size();
+        s += t;
+        spans.push_back(Span{a, s.size(), c});
+    }
+    template <class... A>
+    void addf(const char* fmt, A... args) {
+        char b[192];
+        snprintf(b, sizeof(b), fmt, args...);
+        s += b;
+    }
+};
+
+inline void summary(Coloured& t, float px) {
     std::lock_guard<std::mutex> lk(g_mu);
     // WHERE YOU ARE, in the unit the bar and the keys work in. This line is the bar's own and is
     // there with or without the map.
@@ -1157,75 +1343,116 @@ inline void summary(char* out, size_t cap, float px, float levelLen) {
     // further right, and elsewhere in the rotated frame x does not move at all while time does.
     // With the tick on screen both of those read as what they are.
     const long long total = std::max(1LL, g_barTicks);
-    int n = snprintf(out, cap, "t=%lld / %lld  (%.0f%%)   x=%.0f\n",
-                     (long long)g_nowTick, total,
-                     100.0 * (double)g_nowTick / (double)total, (double)px);
-    if (n < 0 || (size_t)n >= cap) return;
-    if (!mapWanted()) return;       // the bar alone says where you are and stops there
+    if (!mapWanted()) {             // the bar alone says where you are and stops there
+        t.addf("t=%lld / %lld (%.0f%%)  x=%.0f", (long long)g_nowTick, total,
+               100.0 * (double)g_nowTick / (double)total, (double)px);
+        return;
+    }
+    t.addf("t=%lld / %lld  x=%.0f", (long long)g_nowTick, total, (double)px);
     // "Nothing recorded and nothing loaded", not "no file loaded": a solve in progress has rounds
     // in memory and no file yet, and that is exactly when watching the map grow is worth
     // something.
     if (emptyLocked()) {
-        snprintf(out + n, cap - n,
-                 "ITERATION MAP  nothing recorded for this level\n"
-                 "  (solve it once, or build a map from a log with py/itermap_from_log.py)");
+        t.add("\nno map recorded for this level (solve it, or py/itermap_from_log.py)");
         return;
     }
     rebuildHotLocked();
+    // What the map says about this spot, on the same line.
+    t.add(" | ");
+    if (const Hot* here = atLocked(px)) {
+        t.addf("%d death%s", here->deaths, here->deaths == 1 ? "" : "s");
+        if (here->deaths > 0) {
+            t.add(" (");
+            t.add(kindName(here->dominant), textRgb(kindColor(here->dominant, 1.f)));
+            t.add(")");
+        }
+        t.addf(", %d fixup%s", here->fixups, here->fixups == 1 ? "" : "s");
+        if (here->searchFixups) t.addf(" (%d search)", here->searchFixups);
+        if (here->firstIter == here->lastIter) t.addf(", round %d", here->firstIter);
+        else t.addf(", rounds %d-%d", here->firstIter, here->lastIter);
+    } else {
+        t.add("clear on the first plan");
+    }
+    t.add("\n");
     const Hot* top = hottestLocked();
-    char worst[96] = "";
-    if (top && g_rounds > 0)
-        snprintf(worst, sizeof(worst), "   worst x=%.0f (%d %s, %.0f%%)",
-                 (double)(top->x0 + kBucket * 0.5f), top->deaths, kindName(top->dominant),
-                 100.0 * top->deaths / (double)std::max(1, (int)g_deaths.size()));
+    t.addf("%d rounds, %zu deaths, %zu fixups", g_rounds, g_deaths.size(), g_fixups.size());
+    // The fixups split by cause: where the model was wrong, and where a search sent a plan the
+    // model knew dies (Fixup::sameDeath) -- the rest of them being the model's.
+    const size_t searchFx = searchFixupsLocked();
+    if (searchFx) t.addf(" (%zu search)", searchFx);
+    if (top && g_rounds > 0) {
+        t.addf(", worst x=%.0f (%d ", (double)(top->x0 + kBucket * 0.5f), top->deaths);
+        t.add(kindName(top->dominant), textRgb(kindColor(top->dominant, 1.f)));
+        t.add(")");
+    }
+    t.add("\n");
+    // The map's own state, on a line of its own and only when there is something to say.
+    std::string tags;
+    auto tag = [&](const char* s) {
+        if (!tags.empty()) tags += "  ";
+        tags += s;
+    };
     // g_mapLevel is set only by save/load, so it doubles as "this run is over": a map still being
     // recorded has not failed to clear, it has not finished.
-    const char* state = (g_mapLevel < 0) ? "   [in progress]"
-                                         : (g_cleared ? "" : "   [did not clear]");
+    if (g_mapLevel < 0) tag("[in progress]");
+    else if (!g_cleared) tag("[not cleared]");
     // A map with deaths but no tails is not a map whose tails failed to draw -- it is a map that
     // never had any. Only a run records them; py/itermap_from_log.py cannot, because the tail is a
     // trajectory and the log holds one line per round, not one per tick. Every file in data/ came
     // from that rebuild, so "the trajectories are missing" is what every stored map looks like, and
     // it was reported as a drawing bug (2026-08-29) exactly because nothing said otherwise.
-    const char* tails = (!g_deaths.empty() && g_paths.empty())
-                        ? "   [no tails in this map - rebuilt from a log]" : "";
-    // The fixups split by cause: where the model was wrong, and where a search sent a plan the
-    // model knew dies (Fixup::sameDeath).
-    // A line of its own: the header already runs close to the column's ~80 characters.
-    const size_t searchFx = searchFixupsLocked();
-    n += snprintf(out + n, cap - n, "ITERATION MAP  %d rounds  %zu deaths  %zu fixups%s%s%s\n",
-                  g_rounds, g_deaths.size(), g_fixups.size(), worst, state, tails);
-    if (n < 0 || (size_t)n >= cap) return;
-    if (!g_fixups.empty()) {
-        n += snprintf(out + n, cap - n,
-                      "  fixups: %zu where the model was wrong, %zu a search sent (same death)\n",
-                      g_fixups.size() - searchFx, searchFx);
-        if (n < 0 || (size_t)n >= cap) return;
+    if (!g_deaths.empty() && g_paths.empty()) tag("[no tails]");
+    if (!tags.empty()) {
+        t.add(tags.c_str());
+        t.add("\n");
     }
-    const Hot* here = atLocked(px);
-    if (here) {
-        n += snprintf(out + n, cap - n,
-                      "  here x=%.0f: %d death%s (%s), %d fixup%s (%d search)  (rounds %d-%d)\n",
-                      (double)px, here->deaths, here->deaths == 1 ? "" : "s",
-                      kindName(here->dominant),
-                      here->fixups, here->fixups == 1 ? "" : "s", here->searchFixups,
-                      here->firstIter, here->lastIter);
-    } else {
-        n += snprintf(out + n, cap - n,
-                      "  here x=%.0f: clear on the first plan   (%.0f%% of the level)\n",
-                      (double)px, levelLen > 1.f ? 100.0 * px / levelLen : 0.0);
+    // The key: one line, the longest of them (80 characters, the bar's width). A bar between the
+    // three groups, one space between words.
+    t.add("deaths:");
+    for (int k = 0; k < KindCount; ++k) {
+        t.add(" ");
+        t.add(kindName(k), textRgb(kindColor(k, 1.f)));
     }
-    if (n < 0 || (size_t)n >= cap) return;
-    // Two lines, not one. Measured on a 1706x960 worker: the single 118-character line ran off
-    // the right edge and lost its last item. The overlay column has no wrapping, so the length of
-    // every line here is a fixed budget of about 80 characters.
-    // The last item is transport, and while the loop owns the level there is none -- saying so
-    // beats offering a click that barLive() will refuse.
-    snprintf(out + n, cap - n,
-             "  deaths: green deeper / cyan followed / violet forced / red rewound / pink wedged\n"
-             "  fixups: amber model / magenta kill / grey search (same death), purple veto\n"
-             "  %s",
-             barVisible() ? "click the strip to seek" : "live: the solve is writing this");
+    t.add(" | fixups:");
+    for (int k = 0; k < FixCount; ++k) {
+        t.add(" ");
+        t.add(fixupName(k), textRgb(fixupColor(k, 1.f)));
+    }
+    t.add(" | ");
+    t.add("veto", kVetoText);
+}
+
+// A CCLabelBMFont takes one colour for the whole string, so the coloured words are applied to the
+// letters after setString. The letters are children of the label tagged by their index in the
+// string (cocos2d-x 2.x createFontChars). setString REUSES the sprites of the previous string and
+// leaves their colours as they were -- so a number that gained a digit shifted every word after it,
+// and the words that had been coloured passed their colour on to whatever now stood at their index
+// (measured on the first screenshot: "on the first plan" half green). Every letter is therefore
+// set, to white unless a span says otherwise. A space may have no sprite, and is not counted.
+//
+// The first call says how many letters were found, once: this is the one place the readout relies
+// on how the engine numbers its glyphs, and "the key is all white" would otherwise look like a
+// colour that failed to apply (rule 4: measure the instrument).
+inline void colourLetters(cocos2d::CCLabelBMFont* lbl, const Coloured& t) {
+    std::vector<cocos2d::ccColor3B> col(t.s.size(), cocos2d::ccColor3B{255, 255, 255});
+    for (const Span& sp : t.spans)
+        for (size_t i = sp.a; i < sp.b && i < col.size(); ++i) col[i] = sp.c;
+    size_t want = 0, found = 0;
+    for (size_t i = 0; i < col.size(); ++i) {
+        if (t.s[i] == ' ' || t.s[i] == '\n') continue;
+        auto* ch = static_cast<cocos2d::CCSprite*>(lbl->getChildByTag((int)i));
+        const bool coloured = col[i].r != 255 || col[i].g != 255 || col[i].b != 255;
+        want += coloured ? 1 : 0;
+        if (!ch) continue;
+        ch->setColor(col[i]);
+        found += coloured ? 1 : 0;
+    }
+    static bool s_said = false;
+    if (s_said || want == 0) return;
+    s_said = true;
+    char b[128];
+    snprintf(b, sizeof(b), "itermap: readout colours - %zu of %zu letters found by tag", found, want);
+    writeResult(b);
 }
 
 // ---- the block in the corner ----
@@ -1236,13 +1463,16 @@ inline void summary(char* out, size_t cap, float px, float levelLen) {
 // right edge the way it did in the column; and turning the map on no longer moves any of the
 // lines in the top-left column, which is what an overlay that reshuffles what you were reading
 // costs you.
-inline void drawLabel(cocos2d::CCNode* parent, float px, float levelLen) {
+inline void drawLabel(cocos2d::CCNode* parent, float px) {
     using namespace cocos2d;
     auto* lbl = static_cast<CCLabelBMFont*>(parent->getChildByTag(LABEL_TAG));
     // The bar gets a readout of its own -- where you are, in ticks -- and the map adds its
     // analysis under it. summary() decides which of the two it is writing.
     if (!stripVisible()) {
-        if (lbl) lbl->setVisible(false);
+        if (lbl) {
+            lbl->setVisible(false);
+            if (*lbl->getString()) lbl->setString("");      // hidden is empty too (see drawWorld)
+        }
         g_labelW = g_labelH = 0.f;      // ...so the strip stops painting a panel for it
         return;
     }
@@ -1263,23 +1493,34 @@ inline void drawLabel(cocos2d::CCNode* parent, float px, float levelLen) {
         parent->addChild(lbl);
     }
     lbl->setVisible(true);
+    // setString rebuilds every glyph sprite, so it is throttled the same way the session HUD is.
+    // BEFORE the measuring below, so that the frame that draws a new string is measured with it.
+    static auto s_last = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (!(std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last).count() < 120
+          && *lbl->getString())) {
+        s_last = now;
+        Coloured t;
+        summary(t, px);
+        lbl->setString(t.s.c_str());
+        colourLetters(lbl, t);
+    }
     const CCRect box = stripBox();
-    lbl->setPosition({box.origin.x + box.size.width,
+    // THE PANEL IS NO WIDER THAN THE BAR: it spans the label plus the padding drawStrip adds (one
+    // `lp` on the left, half on the right -- the half is taken off the label's own position, so
+    // the panel's right edge is the bar's). A line that would not fit shrinks the whole label
+    // instead of hanging over the bar's edge; the lines are written so that this does not happen
+    // in the ordinary case (see summary).
+    const float lp = box.size.height * 0.25f;
+    const float maxW = box.size.width - 1.5f * lp;
+    const float cw = std::max(1.f, lbl->getContentSize().width);
+    lbl->setScale(cw * 0.5f > maxW ? maxW / cw : 0.5f);
+    lbl->setPosition({box.origin.x + box.size.width - 0.5f * lp,
                       box.origin.y + box.size.height + box.size.height * 0.25f});
     // Measured every frame, not only when the string changes: the box is what the strip paints
     // its backing panel against, and a stale one leaves text hanging off the panel's edge.
     g_labelW = lbl->getContentSize().width * lbl->getScale();
     g_labelH = lbl->getContentSize().height * lbl->getScale();
-    // setString rebuilds every glyph sprite, so it is throttled the same way the session HUD is.
-    static auto s_last = std::chrono::steady_clock::time_point{};
-    const auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last).count() < 120
-        && *lbl->getString())
-        return;
-    s_last = now;
-    char b[512];
-    summary(b, sizeof(b), px, levelLen);
-    lbl->setString(b);
 }
 
 // ---- clicking the strip ----
@@ -1555,7 +1796,6 @@ public:
 // ---- one call from the overlay pass ----
 inline void draw(cocos2d::CCNode* parent, PlayLayer* pl) {
     if (!parent) return;
-    const float levelLen = pl ? pl->m_levelLength : 0.f;
     const float px = (pl && pl->m_player1) ? pl->m_player1->getPositionX() : 0.f;
     if (mapWanted() && pl && pl->m_level) ensureLoaded(pl->m_level->m_levelID.value());
     if (mapWanted()) logScreenMetrics(parent);
@@ -1573,7 +1813,7 @@ inline void draw(cocos2d::CCNode* parent, PlayLayer* pl) {
     // Which way the chevrons point. A drag is live (the marker moves under the finger); a seek
     // decided its direction when it was asked for and keeps it -- see g_seekForward.
     drawCover(parent, g_dragging ? (g_dragFrac * (float)g_barTicks > (float)g_nowTick) : g_seekForward);
-    drawLabel(parent, px, levelLen);
+    drawLabel(parent, px);
     drawStrip(parent);
     drawWorld(pl ? pl->m_objectLayer : nullptr);
 }

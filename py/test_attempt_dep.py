@@ -94,10 +94,10 @@ class JudgeClear(unittest.TestCase):
     def test_the_pinned_package_and_cfg_reach_the_replay(self):
         fp = Calls(0)
         mod = Path("pinned.geode")
-        self.judge(make_kit(self.tmp / "f", persist=True), fp=fp, mod_file=mod, extra_cfg=["singlereset=1"])
+        self.judge(make_kit(self.tmp / "f", persist=True), fp=fp, mod_file=mod, extra_cfg=["snapnodesync=1"])
         planp, cfg_level, worker, kw = fp.args
         self.assertEqual(kw["mod_file"], mod)
-        self.assertEqual(kw["extra_cfg"], ["singlereset=1"])
+        self.assertEqual(kw["extra_cfg"], ["snapnodesync=1"])
         self.assertEqual(worker, 94)
         self.assertIn("levelfile=L.lvl", cfg_level)
 
@@ -181,19 +181,50 @@ class ClearVerdict(unittest.TestCase):
         for line in (LV16_CLEAR, LV22_CLEAR):
             self.assertEqual(results.clear_verdict(["session_start", line]), (True, line))
 
+    # A custom level that ends through its End trigger at 65% (a judge's replay of 10-13): the mod's cfg
+    # dpendtrigclear accepts it, and so must this.
+    END_FIRE = "endtrigger: uid 19687 fired at t=14459"
+    END_SHORT = "complete: attempt=2 step=24338 tick=14459 x=8489 levelMaxX=13025 goalX=13025 pct=65.172859"
+
+    def test_an_end_trigger_finish_short_of_the_goal_is_a_clear(self):
+        from gdtas import results
+        clear, detail = results.clear_verdict(["session_start", self.END_FIRE, self.END_SHORT])
+        self.assertTrue(clear)
+        self.assertIn("END TRIGGER CLEAR", detail)
+
+    def test_a_short_complete_with_no_end_trigger_fired_is_not_a_clear(self):
+        # the measured false clear the pct gate was written for: levelComplete at x=2,458 of 19,570 (4.85%)
+        from gdtas import results
+        line = "complete: attempt=2 step=0 tick=2100 x=2458 levelMaxX=19570 goalX=19570 pct=4.850000"
+        clear, detail = results.clear_verdict(["session_start", line])
+        self.assertFalse(clear)
+        self.assertIn("MID-LEVEL COMPLETE", detail)
+
+    def test_an_end_trigger_of_an_earlier_attempt_does_not_carry(self):
+        from gdtas import results
+        lines = ["session_start", self.END_FIRE, "death: attempt=1 tick=14460 x=8490 wallMs=3 speedX=1",
+                 self.END_SHORT]
+        self.assertFalse(results.clear_verdict(lines)[0])
+
+    def test_the_end_trigger_of_a_nodeath_pass_does_not_carry(self):
+        # SOLVING_JUDGE's pass fires its End trigger before the complete it ends with
+        from gdtas import results
+        lines = SOLVING_JUDGE[:-1] + [self.END_SHORT]
+        self.assertFalse(results.clear_verdict(lines)[0])
+
 
 class ReplayCfg(unittest.TestCase):
     # the run's cfg a collect passes (10-09), less the level and plan lines
     RUN = ["enabled=1", "quitwhendone=1", "blockinput=1", "cbs=0", "cos=1", "fastdt=0.0166667", "fastloops=1800",
            "skiprender=1", "music=mute", "servemode=0", "dpsolve=1", "capture=1", "dpsnapshot=1", "dpsecauto=0",
-           "dparg=--heldall", "attempts=1000000", "singlereset=1", "nodeath=1"]
+           "dparg=--heldall", "attempts=1000000", "snapnodesync=1", "nodeath=1"]
 
     def test_solver_keys_are_dropped_and_the_replay_keys_win(self):
         import seqify
         cfg, dropped = seqify.replay_cfg(["level=9001"], ["input=10,1"], self.RUN)
         self.assertEqual(dropped, ["servemode=0", "dpsolve=1", "capture=1", "dpsnapshot=1", "dpsecauto=0",
                                    "dparg=--heldall", "attempts=1000000", "nodeath=1"])
-        self.assertIn("singlereset=1", cfg)
+        self.assertIn("snapnodesync=1", cfg)
         self.assertFalse(any(c.startswith(("dp", "capture", "servemode", "nodeath")) for c in cfg))
         self.assertEqual([c for c in cfg if c.startswith("attempts=")], ["attempts=1"])
         self.assertEqual(cfg[-2:], ["level=9001", "input=10,1"])

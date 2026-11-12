@@ -67,7 +67,7 @@ struct EntrySnap {
     // restored run has something to be compared against without a second pass
     std::vector<SnapState> head;
     // The player as the pass had it just before the checkpoint was taken (psnap::captureRaw),
-    // written back after the restore (cfg snapplayer): the checkpoint does not carry all of it.
+    // written back after the restore : the checkpoint does not carry all of it.
     std::vector<uint8_t> player;
 };
 inline std::vector<EntrySnap> g_snaps;

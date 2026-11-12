@@ -4,19 +4,8 @@
 
 using namespace p1;
 
-// Whether the solver runs with the spider pad loaded: dp's g_spiderPad is on by default, and the
-// solver reads its arguments in order, so the last --spiderpad / --no-spiderpad among the extra
-// arguments (cfg dparg) decides -- the same answer the CLI comes to.
-static bool solverSpiderPad() {
-    bool on = true;
-    for (const auto& a : g_cfg.dpArgs) {
-        if (a == "--spiderpad") on = true;
-        else if (a == "--no-spiderpad") on = false;
-    }
-    return on;
-}
-
 class $modify(PadTraceGameObject, EnhancedGameObject) {
+    GDSOLVER_HOOK_GUARD()
     void activatedByPlayer(PlayerObject* p) {
         // THE ANCHOR PAYLOAD'S SOURCE. This is the only setter of the flag the
         // spawn queue reads, and triggers reach it because EffectGameObject
@@ -64,12 +53,8 @@ class $modify(PadTraceGameObject, EnhancedGameObject) {
             }
             // ...and pads, for dp's --spentpad (padseed in sweep.hpp). Unconditional for
             // the same reason as the two recorders above.
-            // The spider pad (44) only while the solver loads it (--spiderpad, on by default):
-            // under --no-spiderpad the solver does not load the object, takes its uid for "not a
-            // pad in this level" and skips it, so carrying it would change nothing but the
-            // arguments -- which have to stay byte-identical with the flag off.
-            const bool spiderPadSeed = ty == 44 && solverSpiderPad();
-            if (ty == 8 || ty == 9 || ty == 10 || ty == 34 || spiderPadSeed) {
+            // The spider pad (44) too: the solver always loads it (its --spiderpad is always on).
+            if (ty == 8 || ty == 9 || ty == 10 || ty == 34 || ty == 44) {
                 ++padseed::g_calls;
                 auto* l = GJBaseGameLayer::get();
                 if (l && p == l->m_player1) {
@@ -141,6 +126,7 @@ class $modify(PadTraceGameObject, EnhancedGameObject) {
 };
 
 class $modify(PlayerObject) {
+    GDSOLVER_HOOK_GUARD()
     // Death visual effects are not created during fast mode (cfg `deathfx=1` restores the old
     // behaviour). The reason is recorded at the declaration of g_deathFx
     void playDeathEffect() {
@@ -169,6 +155,23 @@ class $modify(PlayerObject) {
         PlayerObject::update(dt);
         if (isP1) pressLine("update-out");
         if (isP1) traceModifierCounters(this);
+        // cfg nodedbg=t0,t1 (print only): the node stopDashing (0x4f4cc7 in the 2.2091 exe) reads its rotation from, this+0x740.
+        // One line a tick: the update-call counter, the player's and the node's rotation, the node's running actions and vtable.
+        if (isP1 && g_nodeDbg1 >= g_nodeDbg0 && (long long)g_tick >= g_nodeDbg0 && (long long)g_tick <= g_nodeDbg1 && botDriving()) {
+            auto* node = *reinterpret_cast<cocos2d::CCNode**>(reinterpret_cast<char*>(this) + 0x740);
+            char b[320];
+            if (node) {
+                const uintptr_t vt = *reinterpret_cast<uintptr_t*>(node);
+                snprintf(b, sizeof(b),
+                         "nodedbg: t=%lld frame=%lld prot=%.4f node=%p nrot=%.4f nrotx=%.4f nroty=%.4f acts=%u scale=%.3f vis=%d parent=%p vt=base+0x%llx",
+                         (long long)g_tick, (long long)g_frame, this->getRotation(), (void*)node, node->getRotation(), node->getRotationX(), node->getRotationY(),
+                         node->numberOfRunningActions(), node->getScale(), node->isVisible() ? 1 : 0, (void*)node->getParent(),
+                         (unsigned long long)(vt - (uintptr_t)geode::base::get()));
+            } else {
+                snprintf(b, sizeof(b), "nodedbg: t=%lld node=null", (long long)g_tick);
+            }
+            writeResult(b);
+        }
     }
 
     // cfg `sticktrace=t0,t1`: postCollision's ground-object bookkeeping (see g_stickT0).
@@ -597,7 +600,8 @@ class $modify(PlayerObject) {
         // ...and whether THIS tick's press is still queued behind us (see above).
         const int pend = (g_nextInput < g_cfg.inputs.size()
                           && g_cfg.inputs[g_nextInput].step == g_tick
-                          && g_cfg.inputs[g_nextInput].down) ? 1 : 0;
+                          && g_cfg.inputs[g_nextInput].down
+                          && !g_cfg.inputs[g_nextInput].p2) ? 1 : 0;
         // `uid` names WHICH orb, and the line is unusable without it wherever more
         // than one is in reach. Two open questions both need exactly this field:
         //   - lv14 t=13,363 has a yellow and a gravity orb bracketing the player,
@@ -968,6 +972,7 @@ class $modify(PlayerObject) {
 // tick at the clear). SubZero 4002 ends this way on the way back through its reversal, 6,278 px short
 // of its end portal.
 class $modify(EndTrigHook, EndTriggerGameObject) {
+    GDSOLVER_HOOK_GUARD()
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, gd::vector<int> const* remapKeys) {
         if (g_started && solver::g_endTriggerFiredTick < 0) {
             solver::g_endTriggerFiredTick = (long long)g_tick;

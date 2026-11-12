@@ -1,3 +1,204 @@
+# v0.7.0
+
+ * **Geometry Dash 2.2091 (Windows)**, as v0.6.0. No Android build.
+ * **All 22 main levels clear on 2.2091**, cold, in one game session: in 17
+   repairs for the end of the level (v0.6.0: 27) and in 27 with every coin (v0.6.0:
+   33), in 8 and 10.5 minutes in all; the 17 spin-off levels clear too, every coin
+   included (docs/RESULTS.md). Of the 126 Daily, Weekly and Event levels of the
+   v0.6.0 survey, 77 clear in 20 minutes (v0.6.0: 74; docs/CUSTOM_LEVELS.md).
+
+### The model: on by default
+
+ * **Several dozen model fixes are on by default**, each found where the game's
+   replay and the model's walk of one plan came apart, and measured by putting the
+   player into the game at that state. With them the official 22 clear in one
+   session with the level record unchanged, each saved solution clears again from
+   the start in a fresh game, and long custom levels that stopped at a wall (a
+   long wave level, a long ship level, a long two-body level) clear. By family:
+   * **Triggers:** a Player Control trigger's Stop Jump releases the held button;
+     a Reverse trigger turns the player round; a teleport trigger fires once; a
+     Move or Toggle on a trigger channel waits for its channel, and in a rotated
+     gameplay frame is crossed along the channel's axis; an Advanced Follow along x
+     (player 1) moves what it targets; several Moves locking one object to the
+     player, several Taps feeding one Count, an Area Move on top of Moves and one
+     centred on the screen are all taken.
+   * **Ramps:** the launch off a ramp's end (on the underside too, and under a
+     Time Warp), a jump on the landing tick, a seat that carries the player past a
+     block, a ball on a ceiling ramp, a robot on a ramp, several ramps met in one
+     tick, and a rider on a solid that is being scaled.
+   * **The wave:** its kill margins at plain ramps, peaks and ceiling ramp ends;
+     dart-slide blocks; a wave portal taken on a ramp; turned portals after a size
+     portal; the band's ceiling under a camera zoom.
+   * **Orbs, pads, rings, portals and dashes:** a ring on the tick of a speed
+     portal, a ring pressed while riding or by both bodies of a dual, spider orbs,
+     long turned pads, turned mode portals, more remembered portals, the dash
+     release angle of the cube and the ball, the force-box push of a ship or UFO,
+     the robot's held button and hover, a reverse ring's correction of x on a level
+     with Reverse Sync on.
+   * **Moving parts:** recorded rows read a tick late or cut on long levels, an
+     anchor that missed a Count or a Tap, and parts that move on another clock than
+     the recording: long levels with such parts solve against where the game puts
+     them.
+ * The fixes turned on in the last days before this release keep a `--no-<name>`
+   off arm; the older ones are now always on (see Removed).
+ * **The search dates moving parts by each state's own path** (`--statecross`,
+   `--crossbehind`), places objects only where they can change (`--incanchor`),
+   probes each rung of the repair ladder first (`--rlbound 1500`), and at a wall
+   that has killed the plan three times keeps every class's extremes and asks
+   whether a portal was missed (`dpcapenvrepeat`, `dpmissedportalrepeat`).
+
+### Features
+
+ * **Two-player levels (experimental).** The second player's button is planned: each
+   body is searched against the other's plan and the two are merged into one plan
+   whose input mask carries both buttons (bit 1 is player 2's), which the game
+   replays with its own call for the second player. The model gives the second
+   body its own button, its own gravity and the birth the game gives it at a dual
+   portal. A level where one player's press is a switch that moves the other's
+   world is not solved yet (`dpswitch`, off, is the attempt), and the section
+   solver is never used on a two-player level. The play menu names such a level in
+   yellow, not red. See docs/TWO_PLAYER.md.
+ * **The replay panel shows the model's plan.** Past the verified path the panel
+   plays, in blue, how the model believes the plan it has just found flies, from
+   the search's anchor on; the last eight plans are drawn beside it as faint
+   ghosts, each with a figure of the player in its mode. The level bar has a
+   second fill to where the plan reaches ("level 43.0% (plan 49.5%)"). A click or
+   a drag on the panel's bar moves its playhead, and the panel keeps moving
+   through a flight and a section search instead of standing still. See
+   docs/REPLAY_PANEL.md.
+ * **The Search option says what answers.** With Beam or Monte Carlo the log says
+   once per solve which search answers the calls. Monte Carlo cannot follow a coin
+   route, so with Coins on the DP answers every call and a warning line says so;
+   the option's (i) text names the calls that fall back.
+ * **Fixed replay step.** Replay's Options has a box that advances a replay in
+   fixed steps of 1/60 s, so the motion no longer depends on the length of the
+   frames. Off by default.
+ * **For developers:** `py/cold_regress.py --fresh-verify` (and
+   `--fresh-verify-one-session`) plays each saved solution once from the start in
+   a fresh game; cfg `stagecuts` solves a long level in pieces in one game
+   (docs/LEVEL_SLICE.md); cfg `nodeath` can pick one body. New experimental
+   switches, all off: `--crosscx`, `--rlspread0`, `--followtouch`, `--obbfloat`,
+   `--modeswitchkeep`, `--p2switch`, `--p2tappress`, `--pinrows`, `--p2secx`,
+   `--p2taps`, cfg `dpbirthrung`.
+
+### Fixed
+
+ * **A solution found in the fast loop could die when played at normal speed.**
+   The fast loop gave the game's animations unscaled time under a Time Warp, and
+   the scheduler the screen's time instead of its own step (cfg `vtscale`,
+   `vtime`). The level dumps carry nine significant digits, not six.
+ * **A plan could lose a press at a re-anchor.** A solver's tail was read without
+   the buttons its anchor held, so a solution that cleared in the loop could fail
+   from the start.
+ * **The game could crash on leaving some levels**, two-player ones above all: a
+   portal's shine effect outlived its level (cfg `stopfollowers`, on).
+ * **The play menu's notes read levels made before 2.0** (stored in another
+   compressed form, they read as "none"), and "some follow triggers" is named only
+   when the group they move holds something the player meets.
+ * **F6 shows the hitboxes on GD 2.209 again**, outside practice mode too, and
+   **the song stays with the picture** after a seek in a level with a Song Offset.
+ * **A solve started from the play menu replays faster.** With the screen off it
+   still walked every object's visibility on each step of a replay; it now skips
+   that until the screen is turned on (F5). A long level replays its candidates
+   about six times faster (a 189,000-object level: 134 s to 21 s of replay).
+ * **The search's small steps use the whole thread pool**: about a fifth faster on
+   a heavy call, with the same plan.
+
+### Removed
+
+ * **53 solver switches are gone**, the ones that only ever turned off a rule that
+   is now always on. A removed switch is refused by name, with the commit that
+   fixed its behaviour. The list is dp/removed_flags.txt.
+
+# v0.6.1
+
+ * **The Play menu opens for every online or downloaded level on GD 2.2091** (Geode's name for the hotfix executable of 2.209, the one Steam
+   has now). A click on Play could start the level without the mod's menu: the check that decides whether the level page has finished loading
+   read a member of the page at the position it has in the first 2.209 executable, and 2.2091 has one more member before it. The mod now reads
+   the member where each executable keeps it. The solver is the same as in v0.6.0.
+
+# v0.6.0
+
+ * **Geometry Dash 2.2091 (Windows).** This version is built for GD 2.2091 on Steam,
+   Geode's name for the hotfix of 2.209. The first 2.209 executable and the hotfix
+   carry one version string, the hotfix moved nearly every function, and Geode checks
+   only the version string. So before it hooks anything the mod checks the executable
+   it is in (the build stamps of GeometryDash.exe, libcocos2d.dll and
+   libExtensions.dll). On a game it was not built for it stays off, writes one line to
+   the log, shows one line on screen, and the game plays as if it were not installed.
+   Geode does not support 2.2091 yet and runs in its forward-compatibility mode, where
+   its own menus are not available, so the mod brings its own popups, scrolling and
+   keys. These stopgaps, the executable check among them, go once Geode supports
+   2.2091.
+ * **No Android build this time.** The Android game is on the new version too, and
+   there is no Android port of its bindings yet. v0.5.0's Android pre-release stays
+   as it was, for GD 2.2081.
+ * **All 22 main levels clear on 2.2091**, cold, in one game session: in 27 repairs
+   for the end of the level (v0.5.0 on 2.2081: 35) and in 33 with every coin (v0.5.0:
+   60). The paths are the same on the first 2.209 executable.
+ * **The levels the game features.** A new survey took 126 custom levels from the
+   game's own lists: 50 of the last year's Daily levels, the last 50 Weekly levels
+   and every Event level in the Safe list, each solved cold at the release defaults
+   in up to 20 minutes, on GD 2.2081 just before this release. 74 cleared: 41 of 50
+   Daily, 23 of 50 Weekly (demons) and 10 of 26 Event levels. See
+   docs/CUSTOM_LEVELS.md.
+ * **Section search can be turned off.** Under Solve, Options has a **Section
+   search** box, ticked by default. Unticked, a wall the model cannot get past is
+   never handed to the search of the game itself, so a level that needs it is not
+   solved. (`dpsecauto=0` is the same switch.)
+ * **Avoid glitches is a three-way choice**, with arrows: **Off** (the default),
+   **Glitches only** (the old box: the searches drop the routes that rest on
+   frame-level glitches), and **Glitches + wave**, experimental. Glitches + wave adds
+   the wave's behaviour. The wave's button is not planned to change faster than a
+   hand can, the wave keeps a clearance from the floor, the ceiling and solids
+   instead of crawling along them, and among the routes left it prefers fewer button
+   changes and a line nearer the middle of its corridor. Where no route keeps all
+   that, it eases in steps for that stretch only, and takes one step back every
+   900 px past the wall. Each step is said on screen. A choice saved from the old
+   box reads as Glitches only or Off.
+ * **Every option has an (i) button** that says what each of its values means, in a
+   popup that scrolls. The menu keeps one line naming what is not at its default.
+ * **Hold Play to open the menu.** A box in Options makes a click on a level's play
+   button just play it, as without the mod, and opens the menu when the button is
+   held (a ring fills around it while you hold). The menu is always one hold away,
+   so the setting can always be turned back.
+ * **The yellow note names a version.** On a custom level with objects from 2.0 on,
+   the play menu now says which version the newest of them came in ("Its newest
+   objects are from 2.2"). Which levels get the note is unchanged.
+ * **The replay panel** (`Tab`). While a solve runs with the screen dark, the free
+   area from the middle of the screen to the top-right plays GD's own record of the
+   deepest attempt the game has verified: the level's boxes, the path, the moving
+   parts, the corrections. `Tab` goes round the whole verified path, its last
+   stretch and off. While it is on screen, `F2`, `F3`, `F4` and the arrows stop,
+   step, seek and pace it. It is never drawn over the showing of the solution, and
+   it starts empty on every level. See docs/REPLAY_PANEL.md.
+ * **Solve faster is gone** from the settings. The cfg key `dpplainbeside=3` still
+   does it.
+ * **More of the model is on by default.** The rules added since v0.5.0 that showed
+   no harm on the main levels, and that did not make the model part from the game
+   sooner on the recorded attempts of 124 custom levels, are on: among them the
+   speed a wall needs is asked of the model, a long level's late deaths rank, and a
+   dozen fidelity rules for rotated frames, dash rings, drop rings, spiders, robots
+   and the wave on ramps. Two were measured to do harm and stay off. A rule can
+   still change the route a custom level's search takes, and with it the time.
+ * **171 solver switches and 17 cfg keys are gone**, the ones that only ever turned
+   off a rule that has been on by default for a release or more. A removed switch or
+   key is refused by name, with the commit that fixed its behaviour. The list is
+   dp/removed_flags.txt.
+ * **Fixed:** a level with very many triggers could take tens of gigabytes while
+   the solver kept its restart points, and stop the game on a machine short of
+   memory (the saved points now keep only what changes). A search step could read
+   memory an earlier step had freed, which on some custom levels took the game
+   down. `F10` could leave the iteration map's path on the level after it was
+   hidden.
+ * **Nothing is recorded while it drives, on 2.2091 too.** Since 2.209 the game has
+   a death tracker that uploads where players die. While the bot drives, that upload and
+   the other new records (play time, the death sessions) are blocked like the rest.
+   Each session's log ends with a memory audit of the save, which should read
+   `none` for the level's record.
+ * **For developers:** py/divergence_view.py draws, in a browser and without the
+   game, where the model parts from GD's own record of an attempt.
+
 # v0.5.0
 
  * **Fewer repairs, and more custom levels clear.** In one game session, cold, all

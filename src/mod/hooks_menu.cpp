@@ -1,11 +1,13 @@
 // MenuLayer hook: auto-enter and the suite's resident ticker. (The mode choice for a level the
 // player picks is the play menu, hooks_playmenu.cpp.)
 #include "mod/playlayer_helpers.hpp"
+#include "mod/gd_compat.hpp"
 
 using namespace p1;
 
 // ---- Auto-enter ----
 class $modify(P1MenuLayer, MenuLayer) {
+    GDSOLVER_HOOK_GUARD()
     bool init() {
         if (!MenuLayer::init()) return false;
         // Announce once that the mod is here and what it suppresses. This is the minimal
@@ -38,6 +40,27 @@ class $modify(P1MenuLayer, MenuLayer) {
             resolveDataDir(); // must be settled BEFORE the first file access
             postmortem::install(); // leave at least one line of crash cause (after DATA_DIR)
             loadConfig();
+            // A key the flag clean-up removed (session.hpp kRemovedCfg) is refused by name for EVERY
+            // autorun -- solve, replay, serve -- here, before any file is opened or session_start is
+            // written: a stale autorun.cfg must not run as if the key had never been there. The game
+            // stays up at the menu (no auto-enter, no session); the lines are in result.txt, one is on
+            // the screen when a person is looking (a worker that quits when done shows nothing).
+            if (g_cfg.enabled && !g_cfgRemoved.empty()) {
+                bool first = true;
+                for (const auto& m : g_cfgRemoved) {
+                    writeResult("cfg: " + m, first);
+                    first = false;
+                }
+                writeResult("autorun: refused - autorun.cfg names " + std::to_string(g_cfgRemoved.size())
+                            + " removed key(s); no session was started");
+                log::error("gdsolver: autorun.cfg names {} removed key(s) ({}); no session was started",
+                           g_cfgRemoved.size(), g_cfgRemoved.front());
+                this->runAction(CCSequence::create(
+                    CCDelayTime::create(1.5f),
+                    CCCallFunc::create(this, callfunc_selector(P1MenuLayer::onRemovedCfg)),
+                    nullptr));
+                return true;
+            }
             if (g_cfg.enabled) {
                 openFiles();
                 stallwatch::start();
@@ -97,6 +120,12 @@ class $modify(P1MenuLayer, MenuLayer) {
         return true;
     }
 
+    void onRemovedCfg() {
+        notify::show("gdsolver: autorun.cfg names a removed key - no session was started ("
+                         + g_cfgRemoved.front() + ")",
+                     NotificationIcon::Error, 8.f);
+    }
+
     // The body of this lives in level_entry.hpp as enterConfiguredLevel(), so that the level
     // suite enters its second and later levels through the same code as its first.
     void onAutoEnter() {
@@ -107,7 +136,7 @@ class $modify(P1MenuLayer, MenuLayer) {
             if (!suiteLevelSource()) {
                 writeResult("suite: done " + std::to_string(suite::g_levels.size()) + " levels");
                 if (g_cfg.quitWhenDone)
-                    Loader::get()->queueInMainThread([] { utils::game::exit(false); });
+                    Loader::get()->queueInMainThread([] { gdcompat::exitGame(); });
                 return;
             }
         }

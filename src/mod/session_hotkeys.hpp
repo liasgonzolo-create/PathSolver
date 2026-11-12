@@ -40,6 +40,17 @@ inline void clearManualPause();
 // where probe:: is visible.
 inline bool manualPaused();
 inline bool manualStepPending();
+// The replay panel's key (replay_panel.hpp, much further down the chain, where the solver's state it draws is visible).
+namespace replaypanel {
+inline void toggle();
+inline bool wanted();
+// ...and the transport keys it takes over while the screen is dark (see owns() there)
+inline bool owns();
+inline void keyPause();
+inline void keyStep(int ticks);
+inline void keySeek(long long ticks);
+inline void keySpeed(int dir);
+}
 
 // The keys below are Geode keybind settings, declared in mod.json, so they can be rebound and
 // they arrive through the game's own input path.
@@ -48,14 +59,15 @@ inline bool manualStepPending();
 // call where Geode has its own facility, it skips cocos' keyboard dispatcher, and it reports the
 // physical key regardless of which window has focus -- which is why there was a foreground check
 // here at all, comparing the foreground window's process to our own. Going through Geode's input
-// removes the need for it: nothing is delivered while another application has the keyboard.
+// was meant to remove the need for it, and the check is back (hotkeysFocused, below): a worker that
+// has taken the foreground and been left behind must not act on keys typed into another window.
 //
 // A press event says only "down" or "up". The timing further down needs to know how long a key
 // has been held (the repeat delay on the step keys, the acceleration on the transport keys), so
 // the held state is mirrored here and the polling structure is left exactly as it was.
 enum class Key {
     Overlay, Pause, Step1, Step10, Render, Hitboxes, Replay, Quit, Itermap,
-    Faster, Slower, SeekBack, SeekForward, TakeoverEnd, Count
+    Faster, Slower, SeekBack, SeekForward, TakeoverEnd, ReplayPanel, Count
 };
 
 inline bool g_keyDown[(size_t)Key::Count] = {};
@@ -64,10 +76,67 @@ inline bool g_keyDown[(size_t)Key::Count] = {};
 inline const char* const kKeySettings[(size_t)Key::Count] = {
     "key-overlay", "key-pause", "key-step1", "key-step10", "key-render", "key-hitboxes",
     "key-replay", "key-quit", "key-itermap", "key-faster", "key-slower",
-    "key-seek-back", "key-seek-forward", "key-takeover-end"
+    "key-seek-back", "key-seek-forward", "key-takeover-end", "key-replaypanel"
 };
 
 inline bool keyHeld(Key k) { return g_keyDown[(size_t)k]; }
+
+// Whether the keyboard belongs to this game right now: the foreground window is one of our process's.
+//
+// The keybind events are the only way keys reach the hotkeys, and they come from the window's own key
+// callback, so a window that is not in the foreground should never produce one. This does not rely on
+// that. A worker is a game that is not there to be typed into -- it takes the foreground when it starts
+// and the person goes back to their own window -- and a key it acts on from there is a key meant for
+// another application: F9 ends the session, F5 blanks the screen, F2 freezes time. So a press is taken
+// only while the foreground window is ours (the check the GetAsyncKeyState version had, which this
+// path dropped on the grounds that "nothing is delivered while another application has the keyboard";
+// that is what is being asserted here instead of assumed), and the held state is released the moment
+// the window loses it, so a key that was down when the person switched away cannot go on repeating.
+// Android has no such thing as another window.
+inline bool hotkeysFocused() {
+#ifdef GEODE_IS_WINDOWS
+    HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+#else
+    return true;
+#endif
+}
+
+// Presses the gate refused, reported from the poll at most once a second (the listener runs inside the
+// key callback, and a held key repeats: a line per press would be a flood). Main thread only.
+inline int g_keysRefused = 0;
+inline int g_keysRefusedTotal = 0;
+
+// Run at the start of every poll. Releases everything that is held while the window is not the one
+// with the keyboard, and says so once per change of state -- which is also what shows, in the log,
+// whether a key ever reaches the hotkeys from a window that is not in the foreground.
+inline void syncHotkeyFocus() {
+    static bool s_had = true;
+    const bool now = hotkeysFocused();
+    int held = 0;
+    if (!now) {
+        for (size_t i = 0; i < (size_t)Key::Count; ++i) {
+            if (g_keyDown[i]) ++held;
+            g_keyDown[i] = false;
+        }
+    }
+    if (now != s_had) {
+        if (now) log::info("hotkeys: the game window has the foreground again");
+        else log::info("hotkeys: the game window lost the foreground; {} held key(s) released", held);
+        s_had = now;
+    }
+    static std::chrono::steady_clock::time_point s_reported;
+    const auto t = std::chrono::steady_clock::now();
+    if (g_keysRefused > 0 && t - s_reported >= std::chrono::seconds(1)) {
+        log::info("hotkeys: {} key press(es) refused, another window has the foreground (total {})",
+                  g_keysRefused, g_keysRefusedTotal);
+        g_keysRefused = 0;
+        s_reported = t;
+    }
+}
 
 // What a key is bound to right now, for the on-screen legend. The legend used to spell the keys
 // out, which was true while they were fixed and would quietly become a lie the moment one was
@@ -85,7 +154,15 @@ inline void ensureHotkeyListeners() {
     s_installed = true;
     for (size_t i = 0; i < (size_t)Key::Count; ++i) {
         listenForKeybindSettingPresses(kKeySettings[i],
-            [i](Keybind const&, bool down, bool, double) { g_keyDown[i] = down; });
+            [i](Keybind const&, bool down, bool, double) {
+                // A release is always taken (a key must not stay down); a press only while the keyboard is ours.
+                if (down && !hotkeysFocused()) {
+                    ++g_keysRefused;
+                    ++g_keysRefusedTotal;
+                    return;
+                }
+                g_keyDown[i] = down;
+            });
     }
 }
 
@@ -99,14 +176,21 @@ inline void ensureHotkeyListeners() {
 // What is left only stops time (F2/F3/F4) or changes what is drawn (F1/F8 and the arrows).
 inline void pollProbeHotkeys() {
     ensureHotkeyListeners();
-    // F1: show / hide the overlays. Two things it must not do (spec §9): it is refused while
-    // solving, and it never hides the bot badge -- a replay has to be visibly a replay, so that
-    // part is not the user's to turn off. Everything else (coordinates, progress, the key
+    syncHotkeyFocus();
+    // F1: show / hide the overlays. Two things it must not do (spec §9): it does not hide them
+    // while solving, and it never hides the bot badge -- a replay has to be visibly a replay, so
+    // that part is not the user's to turn off. Everything else (coordinates, progress, the key
     // legend) is. (Not F12: that is Steam's screenshot key by default.)
+    //
+    // SHOWING IS NEVER REFUSED. The flag outlives the session, and the key used to be ignored
+    // outright while solving -- so overlays hidden in a replay stayed hidden into the next Solve,
+    // where the search runs nearly all the time and the key could not bring them back (user report,
+    // 2026-10-13). A solve now starts with them shown (uiConfigureSession), and the key can always
+    // turn them on.
     static bool s_f1Down = false;
     bool f1 = keyHeld(Key::Overlay);
     if (f1 && !s_f1Down) {
-        if (solvingNow()) {
+        if (solvingNow() && !g_overlayHidden) {
             log::info("hotkey: F1 ignored (solving)");
         } else {
             g_overlayHidden = !g_overlayHidden;
@@ -117,7 +201,10 @@ inline void pollProbeHotkeys() {
     // F2: pause/resume (for manual experiments; also works outside a session)
     static bool s_f2Down = false;
     bool f2 = keyHeld(Key::Pause);
-    if (f2 && !s_f2Down) g_probeRequest = 2;
+    if (f2 && !s_f2Down) {
+        if (replaypanel::owns()) replaypanel::keyPause();     // the screen is dark and the panel is playing: the panel's
+        else g_probeRequest = 2;
+    }
     s_f2Down = f2;
     // F3: advance 1 substep / F4: advance 10 substeps (only meaningful while paused).
     // Held down they repeat: stepping 200 substeps by hand is 200 presses otherwise. The delay
@@ -125,16 +212,21 @@ inline void pollProbeHotkeys() {
     auto stepKey = [](Key k, int req, bool& down,
                       std::chrono::steady_clock::time_point& since,
                       std::chrono::steady_clock::time_point& last) {
+        // F3 / F4 step the panel one tick / ten while it owns the keys (the screen dark, the panel playing), else the game
+        auto deliver = [req] {
+            if (replaypanel::owns()) replaypanel::keyStep(req == 3 ? 1 : 10);
+            else g_probeRequest = req;
+        };
         constexpr auto kRepeatAfter = std::chrono::milliseconds(500);
         constexpr auto kRepeatEvery = std::chrono::milliseconds(100);
         const bool now = keyHeld(k);
         const auto t = std::chrono::steady_clock::now();
         if (now && !down) {            // the press itself
-            g_probeRequest = req;
+            deliver();
             since = t;
             last = t;
         } else if (now && t - since >= kRepeatAfter && t - last >= kRepeatEvery) {
-            g_probeRequest = req;      // ...and every 100ms once it has been held for 500ms
+            deliver();                 // ...and every 100ms once it has been held for 500ms
             last = t;
         }
         down = now;
@@ -157,7 +249,25 @@ inline void pollProbeHotkeys() {
     // The level is taken from the session when there is one and from the game otherwise, so the
     // key also works while watching a level in plain manual play.
     static bool s_f10Down = false;
-    bool f10 = keyHeld(Key::Itermap);
+    // cfg `f10auto` (a test hook): the press the check cannot send. Counted from the first poll of the showing -- a replay's
+    // start, or the solve's clear -- and held for one poll, so it goes through the same edge test as the key.
+    static bool s_f10Synth = false, s_f10Armed = false;
+    static size_t s_f10Next = 0;
+    static std::chrono::steady_clock::time_point s_f10T0;
+    {
+        const bool showing = g_started && (!solveSession() || g_dpShowSolution);
+        const auto now = std::chrono::steady_clock::now();
+        if (!showing) s_f10Armed = false;
+        else if (!s_f10Armed) { s_f10Armed = true; s_f10Next = 0; s_f10T0 = now; }
+        const bool was = s_f10Synth;
+        s_f10Synth = false;
+        if (s_f10Armed && !was && s_f10Next < itermap::g_f10Auto.size()
+            && std::chrono::duration<double>(now - s_f10T0).count() >= itermap::g_f10Auto[s_f10Next]) {
+            s_f10Synth = true;
+            ++s_f10Next;
+        }
+    }
+    bool f10 = keyHeld(Key::Itermap) || s_f10Synth;
     if (f10 && !s_f10Down) {
         int lv = g_cfg.levelId;
         if (lv <= 0)
@@ -167,6 +277,15 @@ inline void pollProbeHotkeys() {
         log::info("hotkey: F10 -> iteration map {}", itermap::mapWanted() ? "on" : "off");
     }
     s_f10Down = f10;
+    // The replay panel (replay_panel.hpp): GD's record of the deepest verified attempt, in the free corner. Like the
+    // iteration map it only reads what the solver has kept, so it is not refused while solving.
+    static bool s_panelDown = false;
+    const bool panelKey = keyHeld(Key::ReplayPanel);
+    if (panelKey && !s_panelDown) {
+        replaypanel::toggle();     // full -> recent -> off -> full (it says which in result.txt)
+        log::info("hotkey: replay panel key");
+    }
+    s_panelDown = panelKey;
 }
 
 // Whether anything is being drawn right now. Declared here because the hotkey needs it and
@@ -189,22 +308,44 @@ inline bool renderingOn() {
 // frame boundary, then rendering (g_visResetPending). The render key is ignored meanwhile.
 // A worker's screen was never on (skiprender, not g_renderOff, keeps it dark), so there the hold
 // changes nothing: g_renderOff goes back as it was and no reset is asked for.
+//
+// THE SPEED GOES WITH THE SCREEN. The render key's ON is also "stop skipping frames"
+// (g_realtimeOverride, renderTogglePress), and its OFF hands the frames back to the fast loop. The
+// hold used to turn only the drawing off, so a solve whose screen had been on went into the section
+// solve in real time with nothing to see: the replay that takes the run to the section head -- the
+// loop's own verified prefix, thousands of ticks -- ran at the spectating notch (1x by default)
+// instead of the fast loop, and the window sat dark for as long as the song. The hold now does what
+// the key's OFF does, and the lift gives back what the hold found: a screen that was on comes back
+// through the render key's own path (the reset, then real time), and a speed that was real time
+// with the screen off comes back as it was.
 // -1 = no hold in force.
 inline int g_secRenderWas = -1;          // g_renderOff when the hold began (0/1)
 inline bool g_secScreenWasOn = false;    // ...and whether anything was being drawn then
+inline int g_secRealtimeWas = -1;        // ...and g_realtimeOverride (0/1; -1 = not touched)
 inline void secRenderHold() {
     if (g_secRenderWas >= 0) return;
     g_secScreenWasOn = renderingOn();
     g_secRenderWas = g_renderOff ? 1 : 0;
     g_renderOff = true;
-    log::info("secsolve: screen and visibility off until the section solve ends (screen was {})",
-              g_secScreenWasOn ? "on" : "off");
+    g_secRealtimeWas = -1;
+    if (g_cfg.fastdt > 0) {
+        g_secRealtimeWas = g_realtimeOverride ? 1 : 0;
+        g_realtimeOverride = false;
+        // A render-resume asked for just before the handoff would put real time back at the next
+        // frame boundary (hooks_gamelayer); the handoff's own reset starts the replay, so it goes.
+        g_visResetPending = false;
+    }
+    log::info("secsolve: screen and visibility off until the section solve ends (screen was {}, "
+              "speed was {})", g_secScreenWasOn ? "on" : "off",
+              g_secRealtimeWas == 1 ? "real time, now the fast loop" : "the fast loop's");
 }
 inline void secRenderRelease() {
     if (g_secRenderWas < 0) return;
     g_renderOff = g_secRenderWas != 0;
     g_secRenderWas = -1;
-    if (g_secScreenWasOn) g_visResetPending = true;
+    if (g_secScreenWasOn) g_visResetPending = true;       // ...and real time with it, after the reset
+    else if (g_secRealtimeWas == 1) g_realtimeOverride = true;
+    g_secRealtimeWas = -1;
     log::info("secsolve: hold lifted after the reset (screen {})",
               g_secScreenWasOn ? "back after one more reset" : "stays as it was");
 }
@@ -248,6 +389,7 @@ inline void renderTogglePress() {
 
 inline void pollHotkeys() {
     ensureHotkeyListeners();
+    syncHotkeyFocus();
     // F5: rendering on / off. Only in a solve session -- that is the only time there is anything
     // to gain by not drawing (the frames go back to the fast loop). In a plain replay it stays
     // dead: a replay that cannot be seen is not a replay, and turning the screen off by accident
@@ -270,12 +412,14 @@ inline void pollHotkeys() {
     // the key is nobody's.
     static bool s_tkDown = false;
     const bool tk = keyHeld(Key::TakeoverEnd);
-    if (tk && !s_tkDown && takeover::armed()) takeover::endByKey();
+    // In a session armed by the key alone (cfg takeoverkey) the first press is the takeover itself.
+    if (tk && !s_tkDown && takeover::armed()) takeover::keyPressed();
     s_tkDown = tk;
     // A takeover session leaves the level alone except through the person's own play: F7 and the
     // seek keys would restart or run the level under them, and the speed keys are on the arrows,
-    // where up is also GD's jump. The edge tracking below still runs.
-    const bool takeoverOwnsLevel = takeover::armed();
+    // where up is also GD's jump. The edge tracking below still runs. (A session armed by the key
+    // alone is an ordinary replay until the key is pressed, and keeps them.)
+    const bool takeoverOwnsLevel = takeover::ownsLevel();
     bool f9 = keyHeld(Key::Quit);
     if (f9 && !s_f9Down) {
         log::info("hotkey: F9 -> quit to the level screen");
@@ -299,7 +443,12 @@ inline void pollHotkeys() {
     // behind the driver's back would hand it a run it never asked for.
     static bool s_f7Down = false;
     bool f7 = keyHeld(Key::Replay);
-    if (f7 && !s_f7Down && !takeoverOwnsLevel) {
+    // In a session armed by the key alone (cfg takeoverkey) a person who has the input can give it
+    // up with this key: the mode is left and the replay restarts below, whole, ready for the
+    // takeover key. Elsewhere, and at a fixed point, a takeover session ignores it.
+    if (f7 && !s_f7Down && takeover::resetByReplayKey())
+        log::info("hotkey: F7 -> takeover left, replay from the start");
+    if (f7 && !s_f7Down && !takeover::ownsLevel()) {
         if (auto* pl = PlayLayer::get()) {
             if (g_sessionOver && !g_serveMode) {
                 g_sessionOver = false;
@@ -337,8 +486,12 @@ inline void pollHotkeys() {
     if (kDown && !s_downDown) step = -1;
     s_upDown = kUp; s_downDown = kDown;
     if (step != 0 && !takeoverOwnsLevel) {
-        watchSpeedStep(step);
-        log::info("hotkey: {} -> {:g}x", step > 0 ? "faster" : "slower", g_watchSpeed);
+        if (replaypanel::owns()) {
+            replaypanel::keySpeed(step);   // the screen is dark and the panel is playing: its pace, not the game's
+        } else {
+            watchSpeedStep(step);
+            log::info("hotkey: {} -> {:g}x", step > 0 ? "faster" : "slower", g_watchSpeed);
+        }
     }
     // Seeking -- or STEPPING, while the game is stopped.
     //
@@ -374,7 +527,14 @@ inline void pollHotkeys() {
         // map is watchable live they are keys a person has a reason to be pressing.
         // The edge tracking above still runs, so a key held across the end of a solve is not
         // mistaken for a fresh press afterwards.
-        if (showingSolve() || takeover::armed()) return;
+        // ...except the panel's: with the screen dark it is what the arrows move, and moving it touches no round.
+        if (replaypanel::owns()) {
+            if (press) { repeats = 0; since = t; }
+            last = t;
+            replaypanel::keySeek(dir * itermap::seekStep(press ? 0 : ++repeats));
+            return;
+        }
+        if (showingSolve() || takeover::ownsLevel()) return;
         if (press) { repeats = 0; since = t; }
         last = t;
         if (stopped) {

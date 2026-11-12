@@ -1,8 +1,14 @@
 """Hand the input to a person at a point of a plan, and measure the route they play.
 
-    python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --at 5200 --worker-id 93
+    python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --at 5200 --worker-id 101
     python py/takeover.py play --level 9001 --levelfile <level.lvl> --plan <plan> --at-x 4800 ...
-    python py/takeover.py check <run dir> --worker-id 93
+    python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --worker-id 101
+    python py/takeover.py check <run dir> --worker-id 101
+
+With neither --at nor --at-x the plan plays as an ordinary replay (up/down arrows: speed) and the
+takeover key (F8) hands the input over wherever it stands: the checkpoint is put there and the
+rest is as below. The key then ends the mode, as it does after a fixed point (mod cfg takeoverkey=1,
+off by default).
 
 A debugging instrument (the mod side is src/mod/takeover.hpp). Where the repair loop or a section
 search keeps failing, a person can often see a way through that the search does not take. `play`
@@ -75,6 +81,11 @@ PHYS_COLS = ("x", "y", "yvel", "rot", "mode", "upsideDown", "onGround", "onGroun
 
 # The level dumps the model needs (solver::buildPois writes them; cfg clearance=1 asks for it).
 LEVEL_DUMPS = ("objrects.txt", "triggers.txt", "objgroups.txt", "obb.txt")
+# ...and the ones a custom level's solve hands the model as well, kept when the replay wrote them
+# (each is optional: a level without areas or forced blocks writes none).
+LEVEL_DUMPS_OPTIONAL = (("levelsettings.txt", "--levelsettings"), ("rotgameplay.txt", "--rotgameplay"),
+                        ("forceblocks.txt", "--forceids"), ("areas.txt", "--areas"),
+                        ("items.txt", "--items"))
 
 
 def sha256(p: Path) -> str:
@@ -109,10 +120,14 @@ def session_cfg(a, data_root: Path) -> list[str]:
     ]
     if a.at_x is not None:
         cfg.append(f"takeoverx={a.at_x}")
-    else:
+    elif a.at is not None:
         cfg.append(f"takeover={a.at}")
+    else:
+        cfg.append("takeoverkey=1")   # no fixed point: the end key (F8) hands over where it stands
     if a.levelfile:
         cfg.append(f"levelfile={data_root / Path(a.levelfile).name}")
+        if a.levelfile_main:
+            cfg.append("levelfiletype=main")   # a level file with a main level's physics (the spin-offs)
     return cfg + P.read_input_lines(a.plan)
 
 
@@ -138,10 +153,16 @@ def cmd_play(a) -> int:
     data_root = _WorkerBase(a.worker_id, Path(a.workers_root)).data
     cfg = session_cfg(a, data_root)
     extra = [Path(a.levelfile)] if a.levelfile else []
-    point = f"x={a.at_x}" if a.at_x is not None else f"t={a.at}"
-    print(f"lv{a.level}: flying {plan.name} to {point}, then the input is yours.\n"
-          f"  dying returns to that point; the end key (default F8) or a clear ends it.\n"
-          f"  run directory: {run}")
+    if a.at_x is None and a.at is None:
+        print(f"lv{a.level}: replaying {plan.name} as an ordinary replay (up/down arrows: speed).\n"
+              f"  press the takeover key (default F8) where you want to take over: a checkpoint\n"
+              f"  is put there and the input is yours. Dying returns to it; F8 again or a clear ends it.\n"
+              f"  run directory: {run}")
+    else:
+        point = f"x={a.at_x}" if a.at_x is not None else f"t={a.at}"
+        print(f"lv{a.level}: flying {plan.name} to {point}, then the input is yours.\n"
+              f"  dying returns to that point; the end key (default F8) or a clear ends it.\n"
+              f"  run directory: {run}")
     proc, data = observe.launch_visible(a.worker_id, cfg, a.resolution_index, mod,
                                         kill_others=False, workers_root=Path(a.workers_root),
                                         extra_files=extra)
@@ -171,6 +192,7 @@ def cmd_play(a) -> int:
         shutil.copyfile(a.levelfile, run / Path(a.levelfile).name)
     meta = {
         "level": a.level, "levelfile": Path(a.levelfile).name if a.levelfile else "",
+        "levelfile_main": bool(a.levelfile and a.levelfile_main),
         "plan": str(plan), "plan_sha256": sha256(plan),
         "at": a.at if a.at_x is None else None, "at_x": a.at_x, "wait": a.wait,
         "slowmo": a.slowmo, "worker": a.worker_id,
@@ -295,15 +317,48 @@ def replay_cfg(meta: dict, data_root: Path, plan: Path, want_level_dumps: bool) 
         cfg.append("clearance=1")   # only as the trigger for buildPois's level dumps
     if meta.get("levelfile"):
         cfg.append(f"levelfile={data_root / meta['levelfile']}")
+        if meta.get("levelfile_main"):
+            cfg.append("levelfiletype=main")
     return cfg + P.read_input_lines(plan)
 
 
+def custom_start_args(level_dir: Path, plan: Path, out_base: Path,
+                      replay_rows: dict[int, dict]) -> list[str]:
+    """What a custom level's head solve hands the model beyond the object dumps, from the check's own
+    headless replay: the level files it wrote, the state at its first row (--start, as quick_regress
+    builds an anchor) with the band GD had there (--startband), and GD's x per tick (--xtrack, which
+    the loop's calls carry too). Without them the model began a level that starts at y 3,525 on the
+    ground at 105 and parted from GD on its first row (10-12)."""
+    from quick_regress import start_fields
+    args: list[str] = []
+    for f, flag in LEVEL_DUMPS_OPTIONAL:
+        if (level_dir / f).exists():
+            args += [flag, str(level_dir / f)]
+    if replay_rows:
+        t0 = min(replay_rows)
+        r0 = replay_rows[t0]
+        args += ["--start", start_fields(t0, r0, plan)]
+        try:
+            args += ["--startband", f"{float(r0['pmin']):g},{float(r0['pmax']):g}"]
+        except (KeyError, ValueError):
+            pass
+        xt = Path(str(out_base) + ".xtrack.txt")
+        with xt.open("w", newline="", encoding="utf-8") as f:
+            f.write("tick,x\n")
+            for t in sorted(replay_rows):
+                f.write(f"{t},{float(replay_rows[t]['x']):.4f}\n")
+        args += ["--xtrack", str(xt)]
+    return args
+
+
 def model_argv(level_dir: Path, plan: Path, out_base: Path, leveldp: Path,
-               level: int) -> list[str] | None:
+               level: int, replay_rows: dict[int, dict] | None = None) -> list[str] | None:
     """leveldp's replay of `plan`, built the way fidelity_diff.model_replay builds it, from the
-    lab's dumps for an official level or from the dumps the check's own replay wrote."""
+    lab's dumps for an official level or from the dumps the check's own replay wrote (a custom
+    level also gets custom_start_args)."""
     from fidelity_diff import groups_args, whole_run_args
-    if (LEVEL_DATA / f"objrects_lv{level}.txt").exists():
+    official = (LEVEL_DATA / f"objrects_lv{level}.txt").exists()
+    if official:
         objrects = LEVEL_DATA / f"objrects_lv{level}.txt"
         trig = LEVEL_DATA / f"triggers_lv{level}.txt"
         grp = LEVEL_DATA / f"objgroups_lv{level}.txt"
@@ -321,6 +376,8 @@ def model_argv(level_dir: Path, plan: Path, out_base: Path, leveldp: Path,
         args += ["--obb", str(obb)]
     args += groups_args(plan)
     args += whole_run_args(level)
+    if not official:
+        args += custom_start_args(level_dir, plan, out_base, replay_rows or {})
     return [str(leveldp)] + args
 
 
@@ -356,7 +413,8 @@ def cmd_check(a) -> int:
         if meta.get("levelfile"):
             data_root.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(run / meta["levelfile"], data_root / meta["levelfile"])
-        want_dumps = not official and not (level_dir / "objrects.txt").exists()
+        want_dumps = not official and not ((level_dir / "objrects.txt").exists()
+                                           and (level_dir / "levelsettings.txt").exists())
         cfg = replay_cfg(meta, data_root, plan, want_dumps)
         res = run_session(a.worker_id, cfg, timeout_s=a.timeout_minutes * 60,
                           workers_root=Path(a.workers_root), mod_file=Path(a.mod))
@@ -372,6 +430,11 @@ def cmd_check(a) -> int:
             level_dir.mkdir(exist_ok=True)
             for f in LEVEL_DUMPS:
                 copy_held_file(res.data_root / f, level_dir / f)
+        if not official and level_dir.exists():
+            # a run checked before these were kept gets them from this replay
+            for f, _ in LEVEL_DUMPS_OPTIONAL:
+                if not (level_dir / f).exists() and (res.data_root / f).exists():
+                    copy_held_file(res.data_root / f, level_dir / f)
         rec = [l for l in res.lines if l.startswith("level record changed:")]
         out["replay_record_line"] = rec[-1] if rec else "(missing)"
         replay_rows = max(read_dump(rdump).values(), key=len, default={})
@@ -380,7 +443,7 @@ def cmd_check(a) -> int:
         # 2. the model against the headless replay
         if not a.no_model:
             base = tk / f"{stem}.model"
-            argv = model_argv(level_dir, plan, base, Path(a.leveldp), level)
+            argv = model_argv(level_dir, plan, base, Path(a.leveldp), level, replay_rows)
             objrects = Path(argv[1]) if argv else None
             if argv is None:
                 out["model"] = {"status": "no level dumps"}
@@ -459,8 +522,11 @@ def main(argv=None) -> int:
     p.add_argument("--level", type=int, required=True,
                    help="the level number (with --levelfile, the id the session reports)")
     p.add_argument("--levelfile", default="", help="a custom level's raw level file")
+    p.add_argument("--levelfile-main", action="store_true",
+                   help="load --levelfile as a main level (levelfiletype=main): the spin-offs")
     p.add_argument("--plan", required=True, help="the plan flown up to the point (input= lines)")
-    g = p.add_mutually_exclusive_group(required=True)
+    # Neither: the plan plays as a replay and the takeover key (F8) hands over where it stands.
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--at", type=int, help="hand over at this tick")
     g.add_argument("--at-x", type=float, help="hand over once player 1's x passes this")
     p.add_argument("--wait", type=float, default=1.0,

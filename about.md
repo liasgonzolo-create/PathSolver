@@ -20,10 +20,12 @@ level's own page — and a menu asks how to play it:
 
 Under Replay and Solve a **Coins** switch makes the goal every coin as well as
 the end. Under Solve, **Options** (top right) holds the settings about how the
-level is searched: Avoid glitches, and the search itself — the reachability DP,
-or one of two experimental ones. Level selection is the game's own, so any level
-can be picked. (The menu can be turned off in the mod's settings; the play button
-then just plays.)
+level is searched, each with an (i) button that says what its values mean:
+Section search (on by default), Avoid glitches (Off, Glitches only, or the
+experimental Glitches + wave), and the search itself — the reachability DP, or
+one of two experimental ones. Level selection is the game's own, so any level
+can be picked. (Options can also make a click just play the level; holding the
+play button then opens the menu.)
 
 When a level has a Random or Advanced Random trigger, or an area or enter effect
 with a random variance, the menu says so. While the bot drives, the game's random seeds are
@@ -39,7 +41,9 @@ music. That is the run worth watching, and it is the only one you are shown.
 While a level is on screen there is an overlay down the top-left: which round
 the solve is on, how far the best plan has reached, and how much of the current
 search is left. `F1` hides it, `F2` pauses, `F5` turns rendering back on, `F6`
-draws hitboxes, `F10` draws the iteration map, and the arrow keys seek.
+draws hitboxes, `F10` draws the iteration map, and the arrow keys seek. While a
+solve runs with the screen dark, the replay panel (`Tab`) plays the game's own
+record of the deepest attempt it has verified, in the free area to the right.
 
 There are no keys that let you do what the game does not allow: no warp, no
 noclip, no forced gamemode, no infinite jump. The overlay is for watching a run,
@@ -65,9 +69,9 @@ the section solver searches the game itself, and a plan the game clears is a
 solution however it was found. Platformer levels are refused: the search has no
 steering input to choose.
 
-On Android the mod is an experiment and not supported. The physics model is
-Windows GD's, and whether Android GD behaves the same has not been measured, so a
-result reached there is Android's alone.
+This version is for GD 2.209 on Windows, and for the Steam executable it was
+built for: on another one it stays off and says so on screen. There is no Android
+build of this version.
 
 ## Nothing is recorded while it drives
 
@@ -76,7 +80,8 @@ This is a TAS and research tool, not a way to fake records.
 While the bot is driving — solving or replaying — **achievements, statistics,
 coins and the level's own record are all blocked**, including completion
 percentage, normal and practice best, attempts, jumps, orbs, diamonds and the
-secret key. Every session ends by printing what it blocked and a
+secret key, and on 2.209 the upload of where you die, the play time and the
+death sessions. Every session ends by printing what it blocked and a
 `level record changed:` line, which should read `none`.
 
 **Playing it yourself records normally.** The block is tied to an automated

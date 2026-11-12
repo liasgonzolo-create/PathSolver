@@ -35,6 +35,7 @@ struct Obj {
     // and only dies when it reaches the ordinary solid stacked above them.
     // Dropped onto the same column from above it lands on the top face and
     // stands there. Modelled as: landing yes, kill no.
+    // 2: a static solid with the passable byte (--nocolstatic), the same top but left out of a turned frame.
     uint8_t oneway = 0;
     // Which bit of State::portalLatch this gravity portal owns, or -1 for
     // everything that is not one. GD latches a portal the first time the player
@@ -53,6 +54,11 @@ struct Obj {
     // tick from the recording or the trigger definitions). Fixups do not
     // apply near one -- see nearDynObject in fixup.hpp.
     uint8_t dynObj = 0;
+    // --fixreach: the layered record holds this object with ONE row, i.e. it never moved in the run(s) recorded (set where its samples are made)
+    uint8_t recStatic = 0;
+    // A ring a Rotate turns (Dynamics::turnedBox, --ringturn, with the recording's angle changing).
+    // --ringrectgate leaves it out: when GD rebuilds such a ring's cached rect is not read yet.
+    uint8_t rotTurned = 0;
     // Extended Collision (GameObject::m_hasExtendedCollision, +0x280, level property 511), from the
     // objrects `extcol` column. addToSection (0x226500) files such an object in the collision pass's
     // always-checked list (+0x35e0) instead of a section cell, so --bigsection leaves it alone.
@@ -98,6 +104,9 @@ struct Obj {
     // against the recorded corners it is right for 0 of 64 (lv17), 0/72
     // (lv18), 0/63 (lv19), 0/117 (lv20), 0/50 (lv22).
     uint8_t obbOk = 0;
+    float gc[8] = {0,0,0,0,0,0,0,0};   // --obbfloat: GD's own four float corners of the turned box, with the centre they were dumped at
+    uint8_t hasGc = 0;
+    double gcx = 0, gcy = 0;
     double bhw = 0, bhh = 0;   // half sizes along the box's own axes
     double bc = 1, bs = 0;     // its long axis as a unit vector (bc, bs)
     // How far this object moved in y on THIS tick (0 for static ones). Only the
@@ -105,6 +114,9 @@ struct Obj {
     // contact rule has to be read in the RELATIVE frame once the surface itself
     // moves; see the ceiling ride.
     double dcy = 0.0;
+    // How much this object's half-height changed on THIS tick (the dynamic set writes it with dcy): a surface that is SCALED moves its face (cy +- hh) with its
+    // centre standing still, and a rider is carried by the face (--facecarry).
+    double dhh = 0.0;
     // TELEPORT PORTAL (GameObjectType 28, object id 747). tpY is the ABSOLUTE y
     // the player is put at, dumped by the MOD as
     // getRealPosition().y + m_teleportYOffset -- not an offset, because the base
@@ -133,6 +145,14 @@ struct Obj {
     // 1905.000, exactly its unexported orange half. 0,0 = column absent or no
     // linked exit (old dumps); the teleport block falls back to tpY and warns.
     double tpEx = 0.0, tpEy = 0.0;
+    // A teleport portal's m_saveOffset (objrects tpsave, tprx, tpry; --tpsaveoff): the body keeps its place
+    // relative to the portal's REAL position: y' = tpY + (y - tpRY), x' = exit x + (x - real x), i.e. x moves
+    // by tpXOff = tpEx - real x (negative: back).
+    uint8_t tpSave = 0;
+    double tpXOff = 0.0, tpRY = 0.0;
+    // ...with ignoreX the exit's x is the body's own: x' = x + (x - tpRX), tpRX the entry's real x (tpSaveIgx)
+    double tpRX = 0.0;
+    uint8_t tpSaveIgx = 0;
     // getFlipY(). Used only for the blue (gravity) pad's gate -- see
     // objFacingDown(). objrects' 31st column (flipy). Falls back to 0 in an old
     // export that lacks the column.
@@ -175,6 +195,10 @@ struct Obj {
     // button is held (0 = none), and whether the recording has it on at this tick (Dynamics::seek).
     float holdTapX = 0.f;
     uint8_t recOn = 1;
+    // --onlag (dynamic objects; 1 / 1 otherwise): onNew = 0 on the tick of the recorded row that switched the object on,
+    // onPrev = 0 on the tick after it. Only the wave's hazard loop reads them.
+    uint8_t onPrev = 1;
+    uint8_t onNew = 0;
 };
 
 // A verbatim port of GameObject::isFacingDown() (2.2081 win 0x1a1910). GD turns
@@ -207,8 +231,71 @@ inline bool objFacingDown(const Obj& o) {
 // AABB overlaps by 1.61 px in y, but projecting the object's four corners onto
 // the PLAYER's own v axis (the cube is at -52.435 deg) gives max = -15.880
 // against the player's half of 15 -- separated by 0.88 px. GD does not fire.
+// --obbfloat (default off): GD's two-box test as GD runs it, in single precision. OBB2D::calculateWithCenter builds each box's four corners
+// from float sin/cos of its angle, the half sizes and the centre, in this order (the Broma-named CCPoint operators, read off the
+// disassembly 2026-10-24):  X = (cos, sin) * halfW,  Y = (-sin, cos) * halfH,  c0 = (C - X) - Y,  c1 = (C + X) - Y,  c2 = (C + X) + Y,
+// c3 = (C - X) + Y;  its two axes are c1 - c0 and c3 - c0, each scaled by 1 / |axis|^2 (a float reciprocal, then a multiply), and each axis's
+// origin is the double of c0.y * axis.y + c0.x * axis.x. OBB2D::overlaps1Way projects the other box's four corners onto each axis
+// (float products and sum, widened to double) and separates when the origin + 1 lies below the least or the greatest lies below the origin;
+// the test is that in both directions. At x ~ 50,000 a float steps 0.004 px and the corner arithmetic costs several steps, so a contact the
+// double-precision test below calls 5 micrometres short is a touch in the game (a custom level, a ball meeting a turned cube portal at
+// t=27,946: -0.005 px; the same level's mini wave at a turned gravity portal, t=26,919; another's at t=15,210: -0.016 px).
+inline bool g_obbFloat = false;
+#pragma fp_contract(off)
+struct ObbF32P { float x, y; };
+struct ObbF32Box { ObbF32P c[4]; ObbF32P ax[2]; double org[2]; };
+// axes and origins from four corners, as OBB2D::calculateWithCenter does after it has built them
+inline ObbF32Box obbF32FromCorners(const ObbF32P* c) {
+    ObbF32Box b;
+    for (int k = 0; k < 4; ++k) b.c[k] = c[k];
+    const ObbF32P e[2] = { ObbF32P{b.c[1].x - b.c[0].x, b.c[1].y - b.c[0].y},
+                           ObbF32P{b.c[3].x - b.c[0].x, b.c[3].y - b.c[0].y} };
+    for (int i = 0; i < 2; ++i) {
+        const float ls = e[i].x * e[i].x + e[i].y * e[i].y;
+        const float r = 1.0f / ls;
+        b.ax[i] = ObbF32P{e[i].x * r, e[i].y * r};
+        b.org[i] = (double)(b.c[0].y * b.ax[i].y + b.c[0].x * b.ax[i].x);
+    }
+    return b;
+}
+inline ObbF32Box obbF32Build(double cx, double cy, double hw, double hh, double ang) {
+    const float fa = (float)ang;
+    const float sn = sinf(fa), cs = cosf(fa);
+    const float fhw = (float)hw, fhh = (float)hh;
+    const ObbF32P X{cs * fhw, sn * fhw}, Y{-sn * fhh, cs * fhh};
+    const ObbF32P C{(float)cx, (float)cy};
+    const ObbF32P cmx{C.x - X.x, C.y - X.y}, cpx{C.x + X.x, C.y + X.y};
+    const ObbF32P c[4] = { ObbF32P{cmx.x - Y.x, cmx.y - Y.y}, ObbF32P{cpx.x - Y.x, cpx.y - Y.y},
+                           ObbF32P{cpx.x + Y.x, cpx.y + Y.y}, ObbF32P{cmx.x + Y.x, cmx.y + Y.y} };
+    return obbF32FromCorners(c);
+}
+inline bool obbF32OneWay(const ObbF32Box& a, const ObbF32Box& o) {
+    for (int i = 0; i < 2; ++i) {
+        double lo = 0.0, hi = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            const double p = (double)(a.ax[i].x * o.c[k].x + a.ax[i].y * o.c[k].y);
+            if (k == 0 || p < lo) lo = p;
+            if (k == 0 || p > hi) hi = p;
+        }
+        if (a.org[i] + 1.0 < lo || hi < a.org[i]) return false;
+    }
+    return true;
+}
+inline bool obbSatF32(double cx1, double cy1, double hw1, double hh1, double a1,
+                      double cx2, double cy2, double hw2, double hh2, double a2) {
+    const ObbF32Box A = obbF32Build(cx1, cy1, hw1, hh1, a1), B = obbF32Build(cx2, cy2, hw2, hh2, a2);
+    return obbF32OneWay(A, B) && obbF32OneWay(B, A);
+}
+// the same against a box whose four float corners the game itself dumped (--obb): no rebuilding from a rounded angle
+inline bool obbHitGcF32(const float* gc, double px, double py, double half, double ang) {
+    const ObbF32P c[4] = { ObbF32P{gc[0], gc[1]}, ObbF32P{gc[2], gc[3]}, ObbF32P{gc[4], gc[5]}, ObbF32P{gc[6], gc[7]} };
+    const ObbF32Box A = obbF32FromCorners(c), B = obbF32Build(px, py, half, half, ang);
+    return obbF32OneWay(A, B) && obbF32OneWay(B, A);
+}
+#pragma fp_contract(on)
 inline bool obbSat(double cx1, double cy1, double hw1, double hh1, double a1,
                    double cx2, double cy2, double hw2, double hh2, double a2) {
+    if (g_obbFloat) return obbSatF32(cx1, cy1, hw1, hh1, a1, cx2, cy2, hw2, hh2, a2);
     const double dx = cx2 - cx1, dy = cy2 - cy1;
     const double c1 = std::cos(a1), s1 = std::sin(a1);
     const double c2 = std::cos(a2), s2 = std::sin(a2);
@@ -231,7 +318,9 @@ inline bool orientedHit(const Obj& o, double px, double py, double half,
     if (!o.oriented)
         return std::fabs(px - o.cx) <= o.hw + half
             && std::fabs(py - o.cy) < o.hh + half;
-    if (pRot != 0.0) {
+    if (g_obbFloat && o.hasGc && std::fabs(o.cx - o.gcx) < 1e-3 && std::fabs(o.cy - o.gcy) < 1e-3)
+        return obbHitGcF32(o.gc, px, py, half, -pRot * 3.14159265358979 / 180.0);
+    if (pRot != 0.0 || g_obbFloat) {   // --obbfloat: GD builds the box at any angle, zero included
         // BOTH angles have to be in the same handedness. GD's rotations are
         // cocos's (clockwise positive) and obbSat is written in the ordinary
         // counter-clockwise convention, so both get negated -- negating only
@@ -287,53 +376,12 @@ inline bool orientedHit(const Obj& o, double px, double py, double half,
 // fixups instead (a kill record at the measured transition), and stays in
 // fixups_log as the to-fix entry for a per-mode hazard box.
 constexpr double kSawMargin = 0.05;
-// ...and the per-mode deviation the note above calls for. Only the two modes
-// with an actual measurement deviate from the default:
-//   robot: GD's boundary is r + 0.07..0.12 (lv19 saw 187, injected sweep) ->
-//          take the middle, 0.10. The old 0.05 let the search graze 0.02..0.07
-//          closer than GD tolerates, and every such plan came back as a GD
-//          death + a kill fixup (36 of them in fixups_log_lv19).
-//   ball:  GD survives a graze at r - 0.05 (lv12 t=16797) -> the kill radius
-//          sits below that, so the addend is NEGATIVE. Loosening only ADDS
-//          candidate states; a false pass dies in replay and records a fixup.
-// Ship stays at the default: 0.15 across the board regressed lv16's ship
-// section, which is how the margin was found to be per-mode at all.
-// (The ball and the ship have since gone to 0 -- the two notes below.)
-// Saw exact (was --sawexact, always on since 2026-09-26):
-// the BALL's addend is 0, not -0.05. Four old custom levels kill a full ball at a corner distance
-// of 32.276-32.285 from a 32.3 saw (id 88/186: t=4,256, t=18,231, t=8,011,
-// t=9,847), inside the ball's r - 0.05 by 0.03. The addends were fitted before the 0.001
-// vy grid was reproduced (kSawMargin's note), but only the ball's has a witness against it:
-// taking every mode to 0 changed a custom level's route through its saws and the cold stopped against
-// the wall at x=28,575 (it clears with the cube's and robot's addends kept).
-// Saw exact ship (was --sawexactship, always on since 2026-09-26):
-// the SHIP's addend is 0 too. It was never measured -- it is the default the note above left in
-// place -- and another old custom level has a witness against it: a mini ship at t=3,297 with its
-// box corner 32.3037 from a 32.3 saw (uid 1184) that GD does not kill (it kills on the next tick,
-// at 31.66), where the default 0.05 killed a tick early.
-// --sawexactwave (default on since 2026-10): the WAVE's addend is 0 as well. A custom level's wave zig-zags over a
-// static saw (uid 3970, id 1707, scaled radius 9.30225) with its box corner 9.3074 from the centre at
-// t=378 and its box edge 9.3022 above it at t=380/382/384, and GD kills none of them; the default 0.05
-// killed it at t=378 (the wave's addend was never measured -- it is the default above).
-inline bool g_sawExactWave = true;
-// --sawexactufo (default on since 2026-10): the UFO's (mode 3) addend is 0 too. A custom level's upside-down UFO passes a
-// group-moved saw (id 187, radius 21.87) with its box corner 21.8907 from the centre and GD lets it live that
-// tick, where the default 0.05 killed it a tick early. Injecting the UFO's y on the tick before and sweeping it
-// puts GD's boundary between 21.8654 (dies) and 21.8708 (lives): the radius itself, nothing added (the UFO's
-// addend was never measured -- it is the default above).
-inline bool g_sawExactUfo = true;
-// --sawexactcube (default on since 2026-10): the CUBE's (mode 0) addend is 0 as well. The note above kept the cube's 0.05
-// because taking every mode to 0 moved one custom level's route against a wall -- a route effect, not a
-// measurement. Measured in an official level: a cube injected in the air beside a static saw (id 1734, radius 32)
-// dies at a box-corner distance of 32.00 and lives at 32.02, so GD's boundary is the radius itself and the
-// default 0.05 kills a band GD flies through.
-inline bool g_sawExactCube = true;
 inline double sawMarginFor(uint8_t mode) {
     if (mode == 5) return 0.10;
     if (mode == 2 || mode == 1) return 0.0;
-    if (mode == 4 && g_sawExactWave) return 0.0;
-    if (mode == 3 && g_sawExactUfo) return 0.0;
-    if (mode == 0 && g_sawExactCube) return 0.0;
+    if (mode == 4) return 0.0;
+    if (mode == 3) return 0.0;
+    if (mode == 0) return 0.0;
     return kSawMargin;
 }
 
@@ -343,6 +391,10 @@ inline double sawMarginFor(uint8_t mode) {
 inline bool obbOverlap(const Obj& o, double px, double py, double ph,
                        double pdeg) {
     const double th = -pdeg * (1.0 / kRadToDeg);   // cocos rotation is CW +
+    if (g_obbFloat && o.hasGc && std::fabs(o.cx - o.gcx) < 1e-3 && std::fabs(o.cy - o.gcy) < 1e-3)
+        return obbHitGcF32(o.gc, px, py, ph, th);
+    if (g_obbFloat)   // --obbfloat (above): the object's x axis is (bc, bs)
+        return obbSatF32(o.cx, o.cy, o.bhw, o.bhh, std::atan2(o.bs, o.bc), px, py, ph, ph, th);
     const double pc = std::cos(th), ps = std::sin(th);
     const double dx = px - o.cx, dy = py - o.cy;
     // the object's axes
@@ -418,21 +470,6 @@ inline bool outOfSweepReach(const Obj* o, double x0, double y0, double x1,
         || o->cy + ey + reach < std::min(y0, y1) || o->cy - ey - reach > std::max(y0, y1);
 }
 
-// --holdtap (default on since 2026-10): a hazard in the group of a Touch trigger (1595) in hold mode with toggle
-// "off" (properties 81 = 1, 82 = 2), crossed on the x queue, is off on a tick whose previous tick had
-// the button down and on otherwise -- the state's own button, not the recording's. The recording is
-// one attempt's presses, so a plan that holds where that attempt released met the spikes it had
-// switched on, and the search found no way through. Measured on a custom level (Touch uid at
-// x=16,725, eight spikes of group 101 on a floor, x 17,248-17,676), replaying one plan with the
-// release moved: released on 9,779 / 9,790 / 9,800 / 9,815 / 9,830 / 9,960 -> dead on the next tick
-// (on a spike), on 9,970 / 9,985 / 10,010 -> alive 90 ticks on; and the recordings put the switch a
-// tick after the button: a press on 9,805 has the spike off from row 9,806, a release on 9,830 on from
-// 9,831. In the corpus (2026-10-10): 6 of 531 levels have a hold-mode 1595 at all, and of the 183 with
-// a kit only that one level's targets a solid or a hazard -- eight hazards, no solid, so only the
-// hazard test reads it. A press held from before the trigger's crossing counts as down, which GD,
-// with no fresh press after it, may not do (the --ctrltouch rule says the same). Needs --heldall
-// (State::held is the button in every mode); frame 0 only.
-inline bool g_holdTap = true;
 inline thread_local int8_t t_holdHeld = -1;   // the stepped state's button on the previous tick; -1: none
 inline thread_local double t_holdX = 0.0;     // ...and its x at the start of the tick
 inline bool holdTapGone(const Obj* o) {
@@ -444,7 +481,6 @@ inline bool holdTapGone(const Obj* o) {
 // button is part of the state, as nearCtrlHoldBox makes it for --ctrltouch.
 inline std::vector<std::pair<double, double>> g_holdTapSpans;
 inline bool nearHoldTap(double x) {
-    if (!g_holdTap) return false;
     for (const auto& sp : g_holdTapSpans)
         if (x >= sp.first - 30.0 && x <= sp.second + 15.0) return true;
     return false;
@@ -453,7 +489,7 @@ inline bool nearHoldTap(double x) {
 inline bool hazardHit(const Obj* o, double px, double py, double half,
                       double margin, double sawAdd = kSawMargin,
                       int mode = -1, int mini = 0) {
-    if (g_holdTap && holdTapGone(o)) return false;
+    if (holdTapGone(o)) return false;
     if (o->radius > 0.0) {
         const double dx = px - o->cx, dy = py - o->cy;
         const double hRect = sawRectHalfB(mode, mini);   // -1 when unmeasured
@@ -616,7 +652,7 @@ inline bool hazardHit(const Obj* o, double px, double py, double half,
 // kills, and the unturned square missed the box's normal axis by 0.24 px -- the model died a tick late.
 inline bool hazardStage1(const Obj* o, double px, double py, double half, double margin, double sawAdd,
                          int mode, int mini, bool boxFollows) {
-    if (g_hazRectGate && boxFollows && o->obbOk && o->radius <= 0.0)
+    if (boxFollows && o->obbOk && o->radius <= 0.0)
         return std::fabs(px - o->cx) <= o->hw + half + margin
             && std::fabs(py - o->cy) <= o->hh + half + margin;
     return hazardHit(o, px, py, half, margin, sawAdd, mode, mini);

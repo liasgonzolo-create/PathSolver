@@ -61,6 +61,9 @@ struct ModelWorld {
     void* gatesCtx = nullptr;
     // The counting tap's bit and the boxes of the gate it feeds (Model::pressMatters).
     TouchMask tapBit{}, tapGateBits{};
+    // --tap2: how many counting taps follow the first, and the boxes of the gate on each one's item (State::tapsX)
+    int nTapX = 0;
+    TouchMask tapXGate[3]{};
 
     FrameSlices& slicesFor(int f, double wLo) {
         FrameSlices& fs = fsl[(size_t)(f & 3)];
@@ -122,7 +125,7 @@ inline bool inGroup(const GroupKey& k, const State& s, float fallbackDx) {
 // orbs, pads and ramps around ITS x, so the windows of its tick are stretched over that body too.
 // p2Dx is 0 without the flag and for every pair that never separated, so those windows are as
 // before.
-inline float p2Dx(const State& s) { return (g_p2xOff && s.dual && s.frame == 0) ? s.dx2 : 0.f; }
+inline float p2Dx(const State& s) { return (s.dual && s.frame == 0) ? s.dx2 : 0.f; }
 inline void p2Widen(double& wLo, double& wHi, float dLo, float dHi) {
     if (dLo < 0.f) wLo += (double)dLo;
     if (dHi > 0.f) wHi += (double)dHi;
@@ -184,8 +187,9 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     // seek() mutates the rects in place, so the pointers the search already
     // holds (snapObj / usedOrb / usedPad) keep pointing at the same object.
     Level& LG = *FS.lv;
-    LG.dyn.seek((int)t);
+    LG.dyn.seek((int)t, true);   // (applyTriggers follows below: see Dynamics::seek)
     seekOtherFrames(&LG, (int)t);   // --rotpretap only; serial here, before the workers
+    ppSubMark(4);   // --phaseprof's sub-buckets (progress.hpp)
     // ...and then the doors this group has (or has not) opened. Must come
     // after seek and before any window is built. `gFire` is the LATEST
     // firing tick in the group, so a state that touched the box early is
@@ -197,10 +201,14 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     // only stepped to t-1. Measured without it: lv19's platform sits exactly
     // one dx (1.614 px) behind its recording, at every tick.
     LG.dyn.areaPxPrev = xPrev;   // --areamove: GD's area pass reads P1 before the step
+    LG.dyn.areaTickPrev = (int)t - 1;
     LG.dyn.applyTriggers(gtrig, gFire, gFireB, lockAt, (int)t, x);
+    ppSubMark(5);
+    if (g_phaseProf) LG.dyn.censusAlways((int)t, wLo, wHi);
     std::vector<const Obj*>& near = e.near;
     FS.near->forRange(wLo - 40, wHi + 40, [&](const Obj& o) { near.push_back(&o); });
     LG.dyn.collect(Dynamics::NEAR, wLo - 40, wHi + 40, near);
+    ppSubMark(6);
     // --trigdbg <tick>: the mask this GROUP applied, and where it left the
     // object named by --hazdbg. The resim prints the same pair from the
     // state's own mask (`resimwho:`), so the two lines can be put side by
@@ -231,15 +239,14 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     FS.port->forRange(wLo - 60, wHi + 60, [&](const Obj& o) { e.ports.push_back(&o); });
     LG.dyn.collect(Dynamics::PORT, wLo - 60, wHi + 60, e.ports);
     // --portorder (constants.hpp): the collision pass's order, cell by cell and by uid in a cell
-    if (g_portOrder)
-        std::stable_sort(e.ports.begin(), e.ports.end(), [](const Obj* a, const Obj* b) {
-            const int ax = gdSectionCell(a->cx), bx = gdSectionCell(b->cx);
-            if (ax != bx) return ax < bx;
-            const int ay = g_dynamicLevelHeight ? gdSectionCell(a->cy) : 0;
-            const int by = g_dynamicLevelHeight ? gdSectionCell(b->cy) : 0;
-            if (ay != by) return ay < by;
-            return a->uid < b->uid;
-        });
+    std::stable_sort(e.ports.begin(), e.ports.end(), [](const Obj* a, const Obj* b) {
+        const int ax = gdSectionCell(a->cx), bx = gdSectionCell(b->cx);
+        if (ax != bx) return ax < bx;
+        const int ay = g_dynamicLevelHeight ? gdSectionCell(a->cy) : 0;
+        const int by = g_dynamicLevelHeight ? gdSectionCell(b->cy) : 0;
+        if (ay != by) return ay < by;
+        return a->uid < b->uid;
+    });
     FS.pad->forRange(wLo - 40, wHi + 40, [&](const Obj& o) { e.pads.push_back(&o); });
     LG.dyn.collect(Dynamics::PAD, wLo - 40, wHi + 40, e.pads);
     FS.orb->forRange(wLo - 50, wHi + 50, [&](const Obj& o) { e.orbs.push_back(&o); });
@@ -248,6 +255,7 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     LG.dyn.collect(Dynamics::SLOPE, wLo - 60, wHi + 60, e.slps);
     FS.speed->forRange(wLo - 80, wHi + 80, [&](const Obj& o) { e.spds.push_back(&o); });
     LG.dyn.collect(Dynamics::SPEED, wLo - 80, wHi + 80, e.spds);
+    ppSubMark(7);
     // touch-trigger boxes this group could reach this tick, with their bits
     // ...in THIS group's frame (see touchFor): a world-coordinate box is
     // unreachable once the frame turns, which silently shut every door in
@@ -354,11 +362,11 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     // tick's x), and where its group's objects sit in the windows -- the step puts each one at
     // its own state's height (step.hpp, the top of stepOne).
     e.fol.clear();
-    const bool folOn = g_followYOn && (!g_followYs.empty() || !g_followSecObjs.empty());
+    const bool folOn = !g_followYs.empty() || !g_followSecObjs.empty();
     if (folOn || !g_bigSecObjs.empty() || !g_bigSecDyn.empty()) {
         if (folOn)
             for (FollowY& f : g_followYs)
-                if (xPrev < f.cx && f.cx <= x) f.tAct = t;
+                if (!f.touch && xPrev < f.cx && f.cx <= x) f.tAct = t;
         const std::vector<const Obj*>* wins[6] = {&near, &e.ports, &e.pads, &e.orbs, &e.slps,
                                                   &e.spds};
         for (uint8_t wi = 0; wi < 6; ++wi)
@@ -377,10 +385,12 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
                     if (m.first == u) e.fol.push_back({wi, i, kBigSecDynCmd, m.second});
             }
     }
+    ppSubMark(8);
     // Which ramps can veto which solid (SlopeVetoIndex): the same for every
     // state of the group, so worked out here once.
     if (opts.veto) w.vetoIdx.build(near, e.slps);
     solidOrderInto(near, e.nearSolid);
+    ppSubMark(9);
 }
 
 // What --rotwatch keeps from one child's turn (print only).
@@ -421,7 +431,8 @@ inline State advanceState(const State& s, int input, const StepCtx& K, bool& dea
                         && K.t <= g_rotWatchHi;
         if (rw) g_rotWatchUid = -1;
         const int f0R = (int)c.frame;
-        const int nfR = applyRotation(c, (double)s.xAbs, (double)K.dxF, K.t,
+        // --tpjumpnext: the crossing starts where last tick's forward jump left (step.hpp crossBaseX)
+        const int nfR = applyRotation(c, crossBaseX(s), (double)K.dxF, K.t,
                                       input, s.grounded != 0, (double)s.y, true);
         if (rw && nfR >= 0) {   // --rotwatch: print only, read in the serial pass
             rot->set = true;
@@ -537,20 +548,38 @@ inline void fireAutoTriggers(const std::vector<State>& frontier, long long t) {
         // sorted by cx: the first unfired one that has not been crossed ends the scan (two
         // triggers CAN share an x -- lv19 has pairs at 5,955 and 29,265 -- so no early break on a
         // fire)
-        if (xLead < A.cx) break;
+        double xl = xLead;   // --chanmove: a channelled Move is fired by the states that have that channel up
+        if (A.chan != 0 && g_rotQueue && !g_rotQ.empty()) {
+            // a state that has the channel up passes it in its own travel direction (a reversed rider when x falls to cx)
+            bool any = false;
+            xl = 0.0;
+            for (const State& s : frontier) {
+                if ((int)s.rotChan != A.chan) continue;
+                const double px = progressOf(s).x;
+                // --autotrigframe (dynamics.hpp): the trigger's coordinate along the travel axis of the state's frame
+                double ucx = A.cx;
+                if (g_autoTrigFrame && (int)s.frame != 0) { double v; toFrame((int)s.frame, A.cx, A.cy, ucx, v); }
+                if (s.rev ? (px > ucx) : (px < ucx)) continue;
+                if (!any || (s.rev ? px < xl : px > xl)) xl = px;
+                any = true;
+            }
+            if (!any) continue;
+        } else {
+            if (A.chan != 0 && A.chanStatic) continue;   // no rotation queue: --chantog's static test
+            if (xl < A.cx) break;
+        }
         // `frontier` holds states at t-1, so the crossing is t-1 and the effect lands `delay`
         // ticks later.
         A.fireT = (int)(t - 1) + A.delay;
-        A.fireX = A.lockLastX = xLead;
+        A.fireX = A.lockLastX = xl;
         // --autoown: the most ticks a state still behind it needs to reach it at its own speed (dynamics.hpp).
         A.fireSpreadT = 0;
-        if (g_autoOwn)
-            for (const State& s : frontier) {
-                if ((int)s.frame != 0 || s.rev) continue;
-                const double sx = progressOf(s).x;
-                if (sx < A.cx && s.dx > 0.f)
-                    A.fireSpreadT = std::max(A.fireSpreadT, (int)std::ceil((A.cx - sx) / (double)s.dx) + 1);
-            }
+        for (const State& s : frontier) {
+            if ((int)s.frame != 0 || s.rev) continue;
+            const double sx = progressOf(s).x;
+            if (sx < A.cx && s.dx > 0.f)
+                A.fireSpreadT = std::max(A.fireSpreadT, (int)std::ceil((A.cx - sx) / (double)s.dx) + 1);
+        }
         std::printf("autotrig: uid %d x=%.0f crossed at t=%lld, "
                     "effect t=%d\n",
                     A.uid, A.cx, t - 1, A.fireT);
@@ -569,12 +598,16 @@ inline void fireAutoTriggers(const std::vector<State>& frontier, long long t) {
 // May the button change on tick t (--minpulse: not within g_minPulse ticks of the last change;
 // --inputgrid / --gridmap: only on the search's grid, `gridNow`, 1 or less when off)?
 inline bool edgeLocked(const State& s, int gridNow, long long t) {
-    return (g_minPulse > 1 && (int)s.edgeAge + 1 < g_minPulse) || (gridNow > 1 && (t % gridNow) != 0);
+    return (g_minPulse > 1 && (int)s.edgeAge + 1 < g_minPulse)
+           || (g_wavePulse > 1 && s.mode == 4 && (int)s.edgeAge + 1 < g_wavePulse)   // --wavepulse
+           || (gridNow > 1 && (t % gridNow) != 0);
 }
 // May `s` take `input` on tick t? Not a change the button cannot make (edgeLocked), and not an edge
 // on a tick GD cannot put one (--latgap, frames.hpp g_latGap: s.latLock). A search that steps an
 // input this refuses plans something GD will not play.
 inline bool inputAllowed(const State& s, int input, int gridNow, long long t) {
+    // --mustpress (frames.hpp): the tick's button is given
+    if (const int forced = mustPressAt(t); forced >= 0) return input == forced;
     if (edgeLocked(s, gridNow, t) && input != (int)s.action) return false;
     if (s.latLock && input != (int)s.action) return false;
     return true;
@@ -584,7 +617,7 @@ inline bool inputAllowed(const State& s, int input, int gridNow, long long t) {
 // lock (a mode with latency 2 entered from one without).
 inline void noteInput(const State& prev, State& c, int input) {
     c.action = (uint8_t)input;
-    if (g_minPulse > 1)
+    if (g_minPulse > 1 || g_wavePulse > 1)
         c.edgeAge = (input != (int)prev.action) ? 0 : (uint8_t)std::min(254, (int)prev.edgeAge + 1);
     const auto lat2 = [](uint8_t m) { return m == 1 || m == 3; };
     c.latLock = (lat2(c.mode) && !lat2(prev.mode) && !c.dual) ? 1 : 0;
@@ -672,7 +705,10 @@ struct Model {
     // A press is never moot while the counting tap's window is open and its gate unfired: the
     // presses are what it counts (searchLayers pressMoot).
     bool pressMatters(const State& s) const {
-        return w.tapBit && !(s.trig & w.tapGateBits) && !(s.taps & 0x40);
+        if (w.tapBit && !(s.trig & w.tapGateBits) && !(s.taps & 0x40)) return true;
+        for (int e = 0; e < w.nTapX; ++e)
+            if (!(s.trig & w.tapXGate[e]) && !(s.tapsX[e] & 0x40)) return true;
+        return false;
     }
     void fireRotTriggers(int gframe, bool grev, double gLo, double gHi, double wLo, double wHi,
                          long long t) const {

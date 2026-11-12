@@ -52,7 +52,34 @@ side rather than to the solver; it stays in the hundred as a level that did not
 clear. The 20 minutes are the measurement's time box, not a verdict: the
 levels that ran out of time were still making progress, and the runs share one
 machine, several levels at a time, so a level close to the limit can land on
-either side of it.
+either side of it. The hundred was not measured again for v0.6.0 or v0.7.0.
+
+### The Daily, Weekly and Event levels
+
+For v0.6.0 a second survey took the levels the game itself features: 50 drawn at
+random from the last 365 Daily levels, the last 50 Weekly levels (about a year of
+them; Weekly levels are demons), and every Event level in the game's Safe list. Each was
+solved cold at the release defaults and given up to 20 minutes, on GD 2.2081
+with a build from just before the release (before the rules turned on by default
+and the switches removed in v0.6.0). 74 of the 126 cleared.
+
+The same 126 were solved again on the v0.7.0 build, on GD 2.2091, with the same
+20 minutes each and four levels at a time: **77 of the 126 cleared.** Twenty-two
+of them are also the custom levels the regression runs before every release; those
+were not run again, and their result is that of the regression run of this
+release's model fixes, which gave each level 25 minutes.
+
+| list | levels | cleared | ran out of time | stopped | median time to clear | cleared on v0.6.0 |
+|---|--:|--:|--:|--:|--:|--:|
+| Daily | 50 | 42 | 8 | 0 | 133 s | 41 |
+| Weekly | 50 | 24 | 26 | 0 | 444 s | 23 |
+| Event | 26 | 11 | 14 | 1 | 245 s | 10 |
+| all | 126 | 77 | 48 | 1 | | 74 |
+
+The median is over the levels this survey ran itself.
+
+These lists are chosen by the game's developer, and the Weekly ones are demons,
+so the two surveys draw from different pools and their rates are not comparable.
 
 The version a level was saved in is only a guess at what it uses: a level saved in
 2.1 may hold nothing newer than 1.8. On the v0.4.0 build the survey also took 200
@@ -79,7 +106,12 @@ levels with newer objects the wave is the outlier, and the swing has barely been
 measured at all.
 
 *When and with what:* the hundred, 2026-10-11 on the v0.5.0 build and 2026-10-02
-on v0.4.0; the 200 older levels and the rates per mode, 2026-10-02 on v0.4.0.
+on v0.4.0; the 200 older levels and the rates per mode, 2026-10-02 on v0.4.0; the
+Daily, Weekly and Event levels, 2026-10-16 and 10-17 on GD 2.2081, and again
+2026-10-25 on GD 2.2091 with the v0.7.0 build. Four of them
+were run again on 10-17, on builds with the same defaults, after their first run was
+cut short (one never started, one was left by hand, one was stopped for memory, one
+was stopped early by the test harness).
 
 ## Levels that usually solve
 
@@ -113,17 +145,30 @@ section solver finds a way through the game itself — slowly, and not always.
 
 * **Some teleports.** The teleport portal, the teleport trigger and the teleport
   orb are modelled, as are a portal that pushes the player or keeps their height,
-  and an exit right above or below. Not yet: an exit elsewhere in x (the model
-  keeps x as its clock, so that is a jump it cannot take), an orb that pushes the
-  player, an exit the game draws from several objects, and a teleport trigger set
-  off by touch or a spawn, or one that keeps the player's offset.
+  an exit anywhere in x — ahead, above or below, or behind, where the triggers
+  already passed do not fire again, as in the game — and a teleport trigger set
+  off by touch, by a spawn the player's crossing or touch starts, or by an Event
+  trigger listening for the player's pads and orbs. Not yet: an orb that pushes
+  the player, an exit the game draws from several objects, a teleport trigger that
+  keeps the player's offset, and one set off by an item, a delayed spawn or any
+  other event.
 * **Some gravity triggers.** The gravity trigger (2.2) is modelled when the player
-  crossing it sets it off; one set off by touch or a spawn, or one for player 2,
-  is flown by the game with the new gravity and planned by the model with the old.
+  sets it off by crossing or touching it, by starting the spawn that fires it, or
+  through an Event trigger listening for the player's pads and orbs; one for
+  player 2 in a level with a second player, or one set off by an item, a delayed
+  spawn or any other event, is flown by the game with the new gravity and planned
+  by the model with the old.
 * **Some Follow Player Y triggers**: one with a delay, one set off by touch or a
-  spawn, or more of them running at once than the model's state holds.
-* **Two-player levels.** The second player has a button of its own, which the bot
-  never presses; the model has no such mode.
+  spawn, or more of them running at once than the model's state holds -- named
+  only when the group they move holds something with a body (a solid, a hazard, a
+  portal, a pad, an orb); a group of decoration alone changes nothing the player
+  meets.
+* **Two-player levels where one player's press moves the other's world.** The
+  solver plans both players' buttons, each body against the other's plan, but a
+  level where a press of one is a switch the other's way depends on (walls or doors
+  flipped at any moment) is not solved yet, and the section solver is never used
+  on a two-player level ([TWO_PLAYER.md](TWO_PLAYER.md)). The play menu names a
+  two-player level in yellow.
 * **Levels that change from one attempt to the next.** An Item Compare or Item
   Edit can read the attempt count, and Item Persistence keeps items across
   attempts, so a level can, say, skip its intro from the second attempt on. The
@@ -132,7 +177,10 @@ section solver finds a way through the game itself — slowly, and not always.
   settings, off by default, pin what such a level reads, so that every attempt
   meets the same level: `attemptone` (every bot attempt is the level's first),
   `attemptcount=k`, and `persistworld=k` / `persistitems` (every reset starts from
-  one fixed table of kept items).
+  one fixed table of kept items). Many levels count attempts only to show
+  something — the attempt number on a label, a message on the first try — and
+  the play menu warns about a level only when what changes reaches something
+  the player touches or the player itself.
 * **Randomness.** While the bot drives, the game's random seeds are set to the same
   values before every attempt, so each attempt meets the same draw — an Area Move's
   distance, a Random trigger's choice — and the model plans against the positions
@@ -213,8 +261,8 @@ Whatever a level uses, the loop tries, and a level clears if the game lets it.
 The play menu says up front where that is less likely
 ([RUNNING.md](RUNNING.md#the-play-menu)): a red
 line when a level holds something the model cannot express (the teleports,
-gravity and follow triggers above, a two-player level, or a level that changes
-from one attempt to the next), and a yellow one on a custom level with objects
+gravity and follow triggers above, or a level that changes from one attempt to
+the next), and a yellow one on a two-player level and on a custom level with objects
 from 2.0 on. What is
 still planned is saying it afterwards too: a clear reported as either the
 model's alone or one with stretches the section solver found.

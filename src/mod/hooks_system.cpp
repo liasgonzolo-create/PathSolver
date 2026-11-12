@@ -40,6 +40,7 @@ inline bool statBlockActive() { return botDriving(); }
 // `progblock=0` the same run reports the fields GD wrote.
 
 class $modify(GJGameLevel) {
+    GDSOLVER_HOOK_GUARD()
     void savePercentage(int percent, bool isPracticeMode, int clicks, int attempts,
                         bool isChkValid) {
         if (progressBlockActive()) { ++g_blockedProgress; return; }
@@ -50,9 +51,25 @@ class $modify(GJGameLevel) {
         if (progressBlockActive()) { ++g_blockedProgress; return; }
         GJGameLevel::saveNewScore(value, type, ticks, clicks, coins, inputs, save);
     }
+#if GEODE_COMP_GD_VERSION >= 22090 && defined(GEODE_IS_WINDOWS)
+    // 2.209's death-data bookkeeping: every PlayLayer::resetLevel asks the level to close its previous
+    // play session if the last play was long enough ago. That rewrites the PLAYER's record -- the
+    // pending death data moves into the history string, the new session's start is stamped -- and a
+    // driven session's first reset is enough to trigger it (measured: a driven run on a level that
+    // already had a record changed five of its keys, none of them the run's own). It is the player's
+    // data being filed away, not the run's, but filed at the bot's time; it is not done while driving
+    // and happens at the player's own next reset. Its one caller is resetLevel and it returns nothing.
+    // Not counted in g_blockedProgress: that counter is "a recording path escaped the flag", and this
+    // one is not behind it, as expected.
+    void rollOverDeathData209(int now, int gapSeconds) {
+        if (timeBlockActive()) { ++g_rolloverSkipped; return; }
+        GJGameLevel::rollOverDeathData209(now, gapSeconds);
+    }
+#endif
 };
 
 class $modify(GameManager) {
+    GDSOLVER_HOOK_GUARD()
     // The percentage GD records for the level (and reports for the leaderboard).
     void reportPercentageForLevel(int levelID, int percentage, bool isPlatformer) {
         if (progressBlockActive()) { ++g_blockedProgress; return; }
@@ -79,6 +96,7 @@ class $modify(GameManager) {
 // blocking one is how a track gets left playing over a silent session.
 // A replay is left audible and is kept in step with the game in audio::sync (helpers_game.hpp).
 class $modify(FMODAudioEngine) {
+    GDSOLVER_HOOK_GUARD()
     // Count what got through while the session was still solving, and name the first few. A
     // report of "it still makes a sound while solving" is otherwise unactionable: silent() lets
     // the song back in on purpose when the screen goes on (the note there), so the question is
@@ -112,6 +130,7 @@ class $modify(FMODAudioEngine) {
         // game arrived. Muting or pausing after the fact is a frame too late -- that frame is the
         // blip of the track's opening you hear on every rewind.
         if (audio::effectsMuted()) {
+            audio::noteSeekMusic("playMusic held", path);
             audio::holdMusic(path, shouldLoop, fadeInTime, channel);
             return;
         }
@@ -125,14 +144,22 @@ class $modify(FMODAudioEngine) {
     // the same contract the originals have, and outside a driven session both gates are false, so
     // ordinary play is untouched.
     void loadAndPlayMusic(gd::string path, unsigned int time, int musicID) {
-        if (audio::silent() || audio::effectsMuted()) { notedBlocked("loadAndPlayMusic", path); return; }
+        if (audio::silent() || audio::effectsMuted()) {
+            if (audio::effectsMuted()) audio::noteSeekMusic("loadAndPlayMusic refused", path);
+            notedBlocked("loadAndPlayMusic", path);
+            return;
+        }
         notedSound("loadAndPlayMusic", path);
         FMODAudioEngine::loadAndPlayMusic(path, time, musicID);
     }
     void queueStartMusic(gd::string path, float pitch, float unk, float volume, bool loop,
                          int start, int end, int fadeIn, int fadeOut, int musicID, bool p10,
                          int channelID, bool noPrepare, bool dontReset) {
-        if (audio::silent() || audio::effectsMuted()) { notedBlocked("queueStartMusic", path); return; }
+        if (audio::silent() || audio::effectsMuted()) {
+            if (audio::effectsMuted()) audio::noteSeekMusic("queueStartMusic refused", path);
+            notedBlocked("queueStartMusic", path);
+            return;
+        }
         notedSound("queueStartMusic", path);
         FMODAudioEngine::queueStartMusic(path, pitch, unk, volume, loop, start, end, fadeIn,
                                          fadeOut, musicID, p10, channelID, noPrepare, dontReset);
@@ -188,6 +215,7 @@ class $modify(FMODAudioEngine) {
 // During an automated session the backgrounding itself is ignored. Outside a session it
 // passes through untouched
 class $modify(AppDelegate) {
+    GDSOLVER_HOOK_GUARD()
     void applicationDidEnterBackground() {
         if (g_started && !g_sessionOver) {
             ++g_bgBlocked;
@@ -219,6 +247,7 @@ class $modify(AppDelegate) {
 };
 
 class $modify(GameStatsManager) {
+    GDSOLVER_HOOK_GUARD()
     void incrementStat(char const* key, int amount) {
         if (statBlockActive()) {
             ++g_blockedStat;

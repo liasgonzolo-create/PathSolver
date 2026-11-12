@@ -6,7 +6,7 @@
 
 A cold run's manifest used to record the cfg the driver WROTE and the first solver call's
 flags. Neither shows a default: a mod key nobody wrote, or a dp global the call did not name,
-is invisible in both, so "dpspentpad was on" could only be asserted, not read. These two
+is invisible in both, so "dpmodelreanchor was on" could only be asserted, not read. These two
 functions print the values themselves, read from the variables at run time:
 
   src/mod/cfg_effective.gen.hpp     p1::effcfg::modCfg() -- every autorun.cfg key the mod's
@@ -57,19 +57,42 @@ SHARED = {
     "portalpayload": ["g_cfg.portalPayload"],
     "capture": ["g_cfg.researchCapture"],
     "histride": ["g_cfg.histRide"],
-    "portalpayloadlt": ["g_cfg.portalPayloadLt"],
-    "dpanchorrotstep": ["g_cfg.dpAnchorRotStep"],
-    "dpanchorrot2": ["g_cfg.dpAnchorRot2"],
+    "anchorframe2dir": ["g_cfg.anchorFrame2Dir"],
     "hitboxtrace": ["g_cfg.hitboxTrace"],
     "fieldprobe": ["g_cfg.fieldProbe"],
     "killersite": ["g_cfg.killerSite"],
+    "nodeath": ["g_cfg.noDeathCode"],
+    "dppin": ["g_cfg.dpPin"],
+    "dptap": ["g_cfg.dpTap"],
+    "dpswitch": ["g_cfg.dpSwitch"],
+    "dpincanchor": ["g_cfg.dpIncAnchor"],
+    "dprlbound": ["g_cfg.dpRlBound"],
+    "dprlspread0": ["g_cfg.dpRlSpread0"],
+    "dpstatecross": ["g_cfg.dpStateCross"],
+    "dpareaadd": ["g_cfg.dpAreaAdd"],
+    "dpcrosscx": ["g_cfg.dpCrossCx"],
+    "dpcrossbehind": ["g_cfg.dpCrossBehind"],
+    "dpwaveflipcap": ["g_cfg.dpWaveFlipCap"],
+    "dprampseatall": ["g_cfg.dpRampSeatAll"],
+    "dpslopelagplain": ["g_cfg.dpSlopeLagPlain"],
+    "dpwaveflipcapfloor": ["g_cfg.dpWaveFlipCapFloor"],
+    "dpwaveflipceilup": ["g_cfg.dpWaveFlipCeilUp"],
+    "dpwaveportalrotmini": ["g_cfg.dpWavePortalRotMini"],
+    "dpballseatground": ["g_cfg.dpBallSeatGround"],
+    "dprobotslopenohover": ["g_cfg.dpRobotSlopeNoHover"],
+    "dpridesupgrace": ["g_cfg.dpRideSupGrace"],
+    "dpportalobbmode": ["g_cfg.dpPortalObbMode"],
+    "dpcrossminlag": ["g_cfg.dpCrossMinLag"],
+    "dpdualbornlinked": ["g_cfg.dpDualBornLinked"],
+    "dpbirthrung": ["g_cfg.dpBirthRung"],
+    "hbfrom": ["g_cfg.hbFrom"],
     "coins": ["g_cfg.coinMode"],
     "coinroute": ["g_cfg.coinRoute"],
     "coinwatch": ["g_cfg.coinWatch"],
     "worldgates": ["g_cfg.worldGates"],
     "watchspeed": ["g_watchIdx"],
 }
-SHARED_REACH = 600   # characters after the key's test in which its variable must be named
+SHARED_REACH = 2200   # characters after the key's test in which its variable must be named
 
 GLOBAL = r"(?:\w+::)*g_\w+(?:\.\w+)*"
 DECL = re.compile(r"\b(?:auto|bool|int|long long|long|double|float|size_t|unsigned|"

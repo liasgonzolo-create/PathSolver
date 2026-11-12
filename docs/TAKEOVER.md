@@ -20,7 +20,7 @@ It is off unless a session asks for it, and with it off nothing changes.
 ## Running one
 
 ```bash
-python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --at 5200 --worker-id 93
+python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --at 5200 --worker-id 101
 ```
 
 The worker is always named (`--worker-id`): which workers are free is the operator's arrangement.
@@ -57,9 +57,26 @@ The worker is always named (`--worker-id`): which workers are free is the operat
   the worker writes `takeoverend` to the data root's `cmd.txt`, which does what the key does.
 - `--slowmo N` plays at 1/N speed. It only divides the frame time: the physics steps and the tick
   numbers are unchanged, so a run played slowly replays as it is at full speed.
-- The seek, speed and replay keys do nothing in a takeover session (up is also the game's jump).
+- Once the input is yours, the seek, speed and replay keys do nothing (up is also the game's jump).
+  Before that, in a session with no fixed point (below), the plan plays as an ordinary replay and
+  they work.
 
 A custom level is played from its level file: `--level 9001 --levelfile <file>`.
+
+### Taking over wherever the replay stands
+
+```bash
+python py/takeover.py play --level 16 --plan data/solution_lv16_dp.txt --worker-id 101
+```
+
+With neither `--at` nor `--at-x` (the session's `takeoverkey=1`, off by default) there is no point
+fixed ahead. The plan plays as an ordinary replay at the speed you choose (up and down arrows; left
+and right seek, `F7` restarts it from the start), and the first press of `F8` takes the input over
+where it stands: the strict checkpoint is put at the next update boundary and everything above
+applies from there. From then on `F8` ends the session as it does after a fixed point, and the seek,
+speed and replay keys are off. A driver with no keyboard writes `takeovernow` to `cmd.txt` for the
+first press. A death of the plan before the key is pressed is the replay's own death; it does not
+end the session.
 
 ## What it writes
 
@@ -82,7 +99,7 @@ same plan is fed at. That is the claim `check` tests rather than assumes.
 ## Checking a run
 
 ```bash
-python py/takeover.py check <run directory> --worker-id 93
+python py/takeover.py check <run directory> --worker-id 101
 ```
 
 For every attempt, with nobody at the keyboard:

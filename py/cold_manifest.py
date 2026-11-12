@@ -18,6 +18,7 @@ it was, and the comparison reads that record instead of the folder names:
   cfg              every autorun.cfg key the workers were given: the driver's fixed ones and
                    the run's own, in order
   coins            the coin condition the cfg amounts to (on / off / neither)
+  geode            the Geode loader the workers ran on (version, Geode.dll hash, which workers)
   levels           per level, the flags of the first solver call the mod made, as it logged
                    them (`dpsolve: solver args:`), so a cfg key the mod ignored or a flag it
                    added on its own is visible in the record, not inferred
@@ -34,7 +35,8 @@ it was, and the comparison reads that record instead of the folder names:
 
 `compare` refuses (exit 2) when the two runs differ in anything but the cfg keys named with
 --allow: a different commit or package (unless --allow-binary), a dirty tree, another
-resolution or arrangement, or a cfg key nobody named. The solver flags are printed per level
+resolution or arrangement, another Geode loader (when both runs recorded one), or a cfg key
+nobody named. The solver flags are printed per level
 either way; with the same cfg and the same package they must be identical, and a difference
 there is refused too, because then the mod decided something the cfg does not show.
 """
@@ -99,14 +101,18 @@ def read_provenance(mod: Path) -> dict | None:
 
 
 def start(out_dir: Path, *, mod: Path, cfg: list[str], levels: list[int], arrangement: str,
-          resolution: int | None, coins: bool | None, build: dict | None = None) -> dict:
+          resolution: int | None, coins: bool | None, build: dict | None = None,
+          geode: dict | None = None, fresh_verify: bool = False) -> dict:
     """The part known before the run, written at once: the package is hashed here, before a
     build that lands mid-run could change what a later hash reads.
 
     `build` is the package's provenance (read_provenance). With it, head and dirty are the
     BUILD's, and the checkout the driver ran from is kept apart as driver_head -- so two runs
     of one package from different checkouts compare as the same package, and a run of another
-    package from the same checkout does not pass as the same commit."""
+    package from the same checkout does not pass as the same commit.
+
+    `geode` is the loader the workers ran on ({"version", "dll_sha256", "workers"}): two runs on different loaders
+    are not compared unless the difference is named."""
     driver_head = _git("rev-parse", "HEAD")
     driver_dirty = bool(_git("status", "--porcelain", "--untracked-files=no"))
     m = {"written": time.strftime("%Y-%m-%d %H:%M:%S"), "t0": time.time(),
@@ -117,7 +123,12 @@ def start(out_dir: Path, *, mod: Path, cfg: list[str], levels: list[int], arrang
          "mod": str(mod), "mod_sha256": hashlib.sha256(Path(mod).read_bytes()).hexdigest(),
          "cfg": list(cfg), "coins": {True: "on", False: "off", None: "neither"}[coins],
          "arrangement": arrangement, "resolution": resolution,
+         "geode": geode,
          "levels": {str(lv): None for lv in levels}}
+    if fresh_verify:
+        # asked for: every CLEARED level was played once from the start in a new game
+        # (cold_regress.fresh_verify); the per-level evidence is fresh_verify_lv<N>.json
+        m["fresh_verify"] = True
     (out_dir / NAME).write_text(json.dumps(m, indent=1), encoding="utf-8")
     return m
 
@@ -262,6 +273,17 @@ def compare(a: dict, b: dict, allow: set[str], allow_binary: bool) -> int:
     for side, m in (("A", a), ("B", b)):
         if m.get("dirty"):
             refuse.append(f"{side} ran from a tree with modified tracked files")
+    # The Geode loader the workers ran on. Runs from before it was recorded have none: nothing to compare then.
+    ga, gb = a.get("geode"), b.get("geode")
+    if ga and gb and ga.get("dll_sha256") != gb.get("dll_sha256"):
+        line = (f"geode: {ga.get('version')} {str(ga.get('dll_sha256'))[:12]} vs "
+                f"{gb.get('version')} {str(gb.get('dll_sha256'))[:12]}")
+        if "geode" in allow:
+            print(line)
+        else:
+            refuse.append(line + " (name it with --allow geode to accept)")
+    elif bool(ga) != bool(gb):
+        print("geode: recorded by only one of the two runs")
     for k in ("arrangement", "resolution"):
         if a.get(k) != b.get(k):
             line = f"{k}: {a.get(k)} vs {b.get(k)}"
@@ -415,7 +437,7 @@ def main(argv=None) -> int:
     c.add_argument("a", type=Path)
     c.add_argument("b", type=Path)
     c.add_argument("--allow", nargs="*", default=[],
-                   help="cfg keys the two runs may differ in, or `arrangement` / `resolution`")
+                   help="cfg keys the two runs may differ in, or `arrangement` / `resolution` / `geode`")
     c.add_argument("--allow-binary", action="store_true",
                    help="the runs may come from different commits / packages")
     a = ap.parse_args(argv)

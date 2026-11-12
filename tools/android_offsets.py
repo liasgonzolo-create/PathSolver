@@ -250,9 +250,10 @@ class Bindings:
 
 def read_constants() -> dict[str, tuple[int, int]]:
     text = HEADER.read_text(encoding="utf-8")
-    return {m.group(1): (int(m.group(2), 16), int(m.group(3), 16))
+    # GDOFF(win2081, win209, android64): this tool compares the 2.2081 Windows value with the android64 one
+    return {m.group(1): (int(m.group(2), 16), int(m.group(4), 16))
             for m in re.finditer(r"constexpr std::\w+ (k\w+) = GDOFF\((0x[0-9a-fA-F]+), "
-                                 r"(0x[0-9a-fA-F]+)\)", text)}
+                                 r"(0x[0-9a-fA-F]+), (0x[0-9a-fA-F]+)\)", text)}
 
 
 def read_asserts() -> list[tuple[str, int, str, str, int]]:

@@ -1,6 +1,9 @@
 #pragma once
 // ============================================================
 // The human takeover: a debugging mode (cfg `takeover=<tick>` or `takeoverx=<x>`, off by default).
+// With cfg `takeoverkey=1` the point is not fixed ahead: the plan plays as an ordinary replay, and
+// the end key (F8) takes the input over where it stands -- the checkpoint is put there and the mode
+// is the same from then on. The key then ends the mode, as it does after a fixed point.
 //
 // Where the repair loop or a section search stalls, a person can often see a way through that the
 // search does not take. This mode lets them show it. The plan is flown to a point; the strict
@@ -71,7 +74,7 @@ inline void line(const std::string& s) {
 
 inline int presses(const std::vector<InputCmd>& v) {
     int n = 0;
-    for (const InputCmd& c : v) n += c.down ? 1 : 0;
+    for (const InputCmd& c : v) n += (c.down && !c.p2) ? 1 : 0;
     return n;
 }
 
@@ -357,10 +360,74 @@ inline void endByKey() {
     endSession("takeover_end_key");
 }
 
+// cfg `takeoverkey`: hand the input over where the replay stands now. The checkpoint itself is put
+// there at the next update boundary (takeoverAfterUpdate), where the physics stands between two
+// update calls, as at a fixed point. Only before the mode has begun, in a plain replay.
+inline void takeNow(const char* by) {
+    if (!keyOnly() || !g_started || g_sessionOver || g_live || g_done) {
+        writeResult(std::string("takeover: ") + by + " ignored - only an armed replay (cfg takeoverkey) "
+                    "that has not been taken over yet can be");
+        return;
+    }
+    if (g_cfg.dpSolve || g_serveMode) {
+        writeResult(std::string("takeover: ") + by + " ignored - a solve owns the level");
+        return;
+    }
+    g_takeNow = true;
+    writeResult(std::string("takeover: ") + by + " at t=" + std::to_string((long long)g_tick)
+                + " - the input is yours from the next update boundary");
+}
+
+// The replay key (F7) while a person plays in a session armed by the key alone: the attempt in
+// progress is written out, the mode is left (the session stays open, nothing is ended), the plan
+// is put back whole and practice mode is switched off -- leaving it restarts the level -- so the
+// replay plays from the start and the takeover key takes the input over again, anywhere. Returns
+// true when it did. At a fixed point the key stays off (the point is the checkpoint).
+inline bool resetByReplayKey() {
+    if (!keyOnly() || !g_live || g_done || !g_started || g_sessionOver) return false;
+    auto* pl = PlayLayer::get();
+    if (!pl) return false;
+    const float x = pl->m_player1 ? pl->m_player1->getPositionX() : -1.f;
+    writeAttempt("reset", g_tick, x);
+    char b[256];
+    snprintf(b, sizeof(b),
+             "reset by the replay key attempts=%d deaths=%d restores=%d checkpoints=%zu - the mode is "
+             "left, the replay restarts from the start and the takeover key arms it again",
+             g_attemptNo, g_deaths, g_restores, g_cps.size());
+    line(b);
+    g_cfg.inputs = g_fullInputs;
+    g_cfg.toggles = g_fullToggles;
+    g_live = g_waiting = g_cpWanted = g_takeNow = g_restorePending = g_restoring = false;
+    g_paused = false;
+    g_T = -1;
+    g_cps.clear();
+    dropPending();
+    g_from = g_nextN = 0;
+    g_human.clear();
+    g_other = g_attemptNo = g_deaths = g_restores = g_missed = 0;
+    g_dir.clear();
+    g_written = false;
+    g_endWhy.clear();
+    if (pl->m_isPracticeMode) pl->togglePracticeMode(false);
+    return true;
+}
+
+// The takeover key. Before the mode has begun, in a session armed by the key alone, it takes the
+// input here; once a person plays (or at a fixed point's mode) it is the end key, as it was.
+inline void keyPressed() {
+    if (keyOnly() && !g_live && !g_done) takeNow("the key");
+    else endByKey();
+}
+
 // The HUD's takeover line (hud.hpp), "" when there is nothing to say.
 inline std::string hudText() {
     if (!armed() || !g_started) return "";
     char b[384];
+    if (keyOnly() && !g_live && !g_done) {
+        snprintf(b, sizeof(b), "TAKEOVER armed: %s hands the input over here (now t=%lld)",
+                 keyName(Key::TakeoverEnd).c_str(), (long long)g_tick);
+        return b;
+    }
     if (g_live) {
         char wait[48] = "";
         if (g_waiting) {

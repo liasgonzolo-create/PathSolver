@@ -75,7 +75,7 @@ inline std::unordered_map<int, int> g_first2;   // ...and p2
 inline int g_calls = 0;   // a denominator for a zero -- see touchseed::g_calls
 inline void reset() { g_first.clear(); g_first2.clear(); g_calls = 0; }
 }
-// ...and PADS (object types 8/9/10/34, dp's L.pads), for dp's --spentpad (cfg dpspentpad).
+// ...and PADS (object types 8/9/10/34, dp's L.pads), for dp's --spentpad (dp --spentpad).
 // GD's activatedByPlayer latch holds for the attempt and collisionCheckObjects drops a latched
 // object before any shape test, so a pad fired before an anchor is dead after it -- while the
 // model's State::usedPad starts empty there. Recorded here, where GD sets the latch, rather than

@@ -103,6 +103,8 @@ inline Level& frameLevel(Level& L0, int f) {
                       [](const Obj& a, const Obj& b) { return a.cx < b.cx; });
         };
         turnVec(L0.objs, p->objs);
+        // --nocolstatic: a static passable solid (oneway 2) is a top in frame 0 only (constants.hpp)
+        std::erase_if(p->objs, [](const Obj& o) { return o.oneway == 2; });
         turnVec(L0.portals, p->portals);
         turnVec(L0.pads, p->pads);
         turnVec(L0.orbs, p->orbs);

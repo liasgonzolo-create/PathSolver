@@ -174,6 +174,9 @@ std::string outcomeDiff(const SolveOutcome& a, const SolveOutcome& b) {
     f(a.resimDead == b.resimDead, "resimDead");
     f(a.resimFirst == b.resimFirst, "resimFirst");
     f(sameText(a.resimWhy, b.resimWhy), "resimWhy");
+    f(a.resimKind == b.resimKind, "resimKind");
+    f(a.dumpT == b.dumpT && a.dumpStart == b.dumpStart, "dump");
+    f(a.startStateT == b.startStateT, "startStateT");
     f(a.resimUid == b.resimUid, "resimUid");
     f(a.resimObjX == b.resimObjX && a.resimObjY == b.resimObjY, "resimObj");
     f(a.resimTrig == b.resimTrig, "resimTrig");

@@ -16,25 +16,45 @@ no stored solution of that kind. **Start** (or `Enter`) starts the level in the 
 game's own, so any level can be picked. A platformer level gets no menu: the solver does not play
 platformer mode, so its play button just plays it.
 
-Under Solve an **Options** button in the top-right corner opens the settings about how the level is
-searched, which keep the last Start's choices:
+Under Replay, Options has **Fixed replay step** (off by default): the replay is advanced in fixed
+steps of 1/60 s, so it no longer depends on the length of the frames; on a screen faster than 60 Hz
+the motion then looks like 60 fps. Off, the replay runs on the game's own frame time.
 
-* **Avoid glitches** (experimental): the searches drop the routes that rest on frame-level
-  glitches. That narrows the search on purpose, so it can lose the only route there is, and while
-  it is ticked a yellow line in the menu says so.
+Under Solve an **Options** button in the top-right corner opens the settings about how the level is
+searched, which keep the last Start's choices. Each has an (i) button that says what every value of it means; the menu itself shows
+only one line (yellow, or red for an experimental search) naming what is not at its default, with an (i) button of its own:
+
+* **Section search** — ticked by default. When a wall is one the model cannot get past, the solver
+  hands it to a search of the game itself over that stretch. Unticked, the solver never does, so a
+  level that needs it is not solved; while it is unticked the menu's Options line says so. (The
+  cfg key `dpsecauto=0` is the same switch.)
+* **Avoid glitches** (experimental), picked with the arrows (or `↑` / `↓`): **Off** (the default);
+  **Glitches only**, where the searches drop the routes that rest on frame-level glitches; or
+  **Glitches + wave**, which adds the wave's behaviour to that: the wave's button is not planned to
+  change faster than a hand can (a press or a release is kept for at least a set number of ticks),
+  and the wave keeps a clearance from the floor, the ceiling and solids instead of crawling along
+  them. Among the routes that remain it prefers the one with fewer button changes and the one that
+  flies nearer the middle of its corridor (a preference, it drops nothing). Either restriction narrows the search on purpose, so it can lose the only route there is, and while it
+  is chosen the menu's Options line says so. Some levels cannot be passed without a hairline dodge, so where the solver finds no route it eases
+  Avoid glitches in steps, for that stretch only: the wave's behaviour first, then the margins halved,
+  quartered and off. About 900 px past the wall it takes one step back, and the next 900 px another,
+  until it is as chosen again. Each step is said on screen and in the result file. A choice saved from the old checkbox reads as Glitches only (ticked) or Off.
 * **Search** — which search answers the solver's calls, picked with the arrows (or `←` / `→`):
-  **DP**, the reachability DP every result in this repository comes from (the default); **Beam**,
+  **DP (default)**, the reachability DP every result in this repository comes from; **Beam**,
   which keeps the best states by the solver's own score at each tick; or **Monte Carlo**, random
   playouts from a fixed seed. The last two are experiments, more likely to fail a level the DP
-  clears, and while one is chosen a red line in the menu says so. Whatever the search, every plan
-  is flown and judged by the game.
+  clears, and while one is chosen the menu's Options line turns red. A call the chosen search cannot
+  follow is answered by the DP, and the log says so on a `search:` line; Monte Carlo cannot follow a
+  coin route, so with Coins on the DP answers every call of the solve and the result file says that
+  once as a warning. Whatever the search, every plan is flown and judged by the game.
 
 The choice is made per play. The menu opens on Replay when a solution for the level is stored (with Coins ticked when the coin solution is), and on Solve when none is. Turning the mod setting **Choose
-the mode on Play** off removes the menu, and the play button then just plays the level. The mod
-setting **Solve faster (not reproducible)**, off by default, lets the plain search start beside the
-cap ladder and be taken as soon as it will do: usually faster, but the same level can take a
-different route and time from one solve to the next. Every plan is still flown and judged by the
-game.
+the mode on Play** off makes a click on the play button just play the level, as without the mod; holding
+the button opens the menu instead (a ring fills around it while you hold, and goes if you let go early), so the
+setting can always be turned back from the menu's Options. Solve faster (not reproducible) is no longer a setting;
+the cfg key `dpplainbeside=3` still lets the plain search start beside the cap ladder and be taken as soon as it will do:
+usually faster, but the same level can take a different route and time from one solve to the next. Every plan is still
+flown and judged by the game.
 
 Under Replay and Solve, up to three lines about the level itself sit above the bot note. None of
 them refuses the run.
@@ -42,21 +62,33 @@ them refuses the run.
 * **Red — not modelled by the solver:** the level holds something the model cannot express at
   all, so it plans blind there and only the section solver can get through: such a level is
   unlikely to be solved.
-  The line names what it found: teleports that move you sideways or have several exits, teleport
-  orbs that push you, teleport triggers set off by touch or a spawn or keeping an offset; gravity
-  triggers set off by touch or a spawn, or for player 2; Follow Player Y triggers with a delay or set off by touch or a spawn, or more than two
+  The line names what it found: teleports with several exits, teleport
+  orbs that push you, teleport triggers keeping an offset or set off by an item, a delayed spawn
+  or an event no pad or orb raises; gravity triggers for player 2 (in a level with a second
+  player) or set off by an item, a delayed spawn or an event no pad or orb raises; Follow Player Y triggers with a delay or set off by touch or a spawn, or more than two
   of them running at once; more gravity portals than the solver can hold (past 128 it shares their slots, which fails in a level that
   also reverses the player or puts two of them close together); a level that runs differently
-  from one attempt to the next (an Item Compare or Item Edit that reads the attempt count, or Item
-  Persistence); or a two-player level, whose second player has a button of its own that the bot
-  does not press.
+  from one attempt to the next (an Item Compare or Item Edit that reads the attempt count, or an
+  item Item Persistence keeps, sets off triggers that reach something the player touches or the
+  player itself — a level that only shows the count is not named). The line gives each a few
+  words ("some teleport triggers") and names two at most, then how many more; the game's log has
+  them in full, on the `play menu: lv<N> checked:` line.
+* **Yellow — a two-player level**: the second player has a button of its own, and the solver plans it,
+  each body against the other's plan; the support is experimental, and a level where one player's press
+  is a switch for the other's way is not solved yet ([TWO_PLAYER.md](TWO_PLAYER.md)).
 * **Yellow — objects from 2.0 on** (custom levels only): the model is measured against the newer
   mechanics one at a time and much of that is still to do, so such a level is slower to solve and
   may not be solved. It counts the objects of types that did not exist before 2.0 (robot, spider,
   swing, teleports, the newer rings and pads, collision and force blocks, area effects) and the
   triggers that act on the game (move, rotate, toggle, spawn, item, camera, time and the like);
   1.8's dual and slopes and 1.9's wave, recoloured blocks, spikes and decoration from the newer
-  versions, and triggers that only change colours, sound or shaders, do not count.
+  versions, and triggers that only change colours, sound or shaders, do not count. The line names
+  the newest version among them — "Its newest objects are from 2.2" — so a level with 2.2's
+  objects reads differently from one whose newest are from 2.0. Each object is dated by the
+  oldest version of a server level that holds it, so the date is a guide: an object can read newer
+  than it is, never older. The version says how new the mechanics are, not how likely the solve is:
+  on the v0.5.0 build, a hundred random levels cleared about as often whether their newest objects
+  came from 2.0, 2.1 or 2.2.
 * **Already solved:** with a solution stored for the Coins choice, red and yellow are left out —
   the level was solvable. Under Solve a yellow line says instead when that solution was filed by
   another version of the mod (or before versions were recorded), since solving it again with this
@@ -74,7 +106,9 @@ fast loop and stays there. When a candidate finally clears, the level restarts a
 played through properly — at 1x, with the artwork and the music. That is the run worth watching,
 and it is the only one you are shown. (`F5` overrides this in either direction, except while a
 section solve runs: its search moves the world back and forth through geometry it does not put
-back, so the screen stays off until it ends — see [SECTION_SOLVE.md](SECTION_SOLVE.md).)
+back, so the screen stays off, and the replay that takes the run to the section head goes back to
+the fast loop even if `F5` had put it at the spectating speed, until the solve ends and the screen
+and the speed come back as they were — see [SECTION_SOLVE.md](SECTION_SOLVE.md).)
 
 **Leaving a level ends its solve.** Quitting mid-solve (`F9` or the pause menu) stops the search
 that level started on its next layer, and the next level you pick starts from a clean slate.
@@ -105,7 +139,7 @@ game flying a plan. It is hidden while the level is held still.
 
 | key | |
 |---|---|
-| `F1` | hide the overlay. Refused while solving, and it never hides the bot badge |
+| `F1` | hide / show the overlay. It does not hide it while solving (showing it always works, and a solve starts with it shown), and it never hides the bot badge |
 | `F2` | pause / resume — `F3` / `F4` step 1 / 10 substeps (held down they repeat) |
 | `F5` | rendering on / off. Only in a solve: there the frames go back to the fast loop, which is most of the speed. In a plain replay it does nothing — a replay you cannot see is not a replay |
 | `F6` | hitboxes: off / on / **only** (the game's own debug drawing; "only" hides the artwork so nothing is left but the geometry the physics uses) |
@@ -113,6 +147,7 @@ game flying a plan. It is hidden while the level is held still.
 | `F8` | end a human takeover (a debugging session, [TAKEOVER.md](TAKEOVER.md)); does nothing elsewhere |
 | `F9` | quit to the level screen |
 | `F10` | the iteration map: where the repair loop spent its rounds. On during a solve, off in a replay, and this flips whichever it currently is |
+| `Tab` | the replay panel: GD's own record of the deepest verified attempt, played in the free area from the middle of the screen to the top-right ([REPLAY_PANEL.md](REPLAY_PANEL.md)). On by default while a solve runs with the screen dark (never in the showing of the solution); the key goes round the whole path (ending with the model's plan in blue) -> its last stretch -> off. While it is on screen, `F2` `F3` `F4` and the arrows are the panel's (stop, step, seek, pace); with the screen on they are the game's. `replaypanel=0` in `autorun.cfg` starts it off |
 | `←` `→` | seek back / forward. A tap is five seconds; holding accelerates. While the game is stopped they step a frame instead. Refused during a solve: the level is the loop's own verification replay and nudging it would spoil the round |
 | `↑` `↓` | spectating speed, one notch (0.25x … 16x). Physics stays at 1/240 either way, so the trajectory and the tick numbers do not change |
 
@@ -161,6 +196,10 @@ python py/itermap_from_log.py --all
 ```bash
 python py/watch_plan_replay.py --level 22 --itermap
 ```
+
+The replay opens on a free worker and leaves every other game running, a solve or a regression
+included. `--kill-others` stops every GeometryDash process first (the Steam copy too), for a window
+that has the screen to itself; use it only when nothing else is running.
 
 ## Sound
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import gdsave, window
 from .paths import BUILD_MOD, WORKERS_ROOT
-from .worker import (_spawn, _WorkerBase, taskkill_image)
+from .worker import (_spawn, _WorkerBase, check_plan_buttons, taskkill_image)
 
 
 def kill_all_gd() -> None:
@@ -55,6 +55,7 @@ def launch_visible(worker_id: int, cfg_lines: list[str],
     (itermap_lv{N}.txt and the like). Copied here rather than by the caller
     because the data root does not exist until _prepare has run.
     """
+    check_plan_buttons(cfg_lines, mod_file)   # before any process is touched
     if kill_others:
         kill_all_gd()
 
@@ -65,6 +66,9 @@ def launch_visible(worker_id: int, cfg_lines: list[str],
 
     for name in ("result.txt", "trace.csv", "dump.csv", "cmd.txt", "plan_in.txt"):
         (w.data / name).unlink(missing_ok=True)
+    # A launch for a person to watch asks for the replay panel itself (a worker's launch turns it off, worker.py).
+    if not any(ln.strip().startswith("replaypanel=") for ln in cfg_lines):
+        cfg_lines = list(cfg_lines) + ["replaypanel=1"]
     (w.data / "autorun.cfg").write_bytes(("\n".join(cfg_lines) + "\n").encode("ascii"))
     for src in extra_files or ():
         if Path(src).exists():

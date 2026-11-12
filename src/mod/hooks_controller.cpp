@@ -47,6 +47,7 @@ int hookExport(HMODULE mod, const char* dll, const char* func, Detour* detour) {
 }  // namespace
 
 $execute {
+    if (!gdsolver::exeguard::allowed()) return;   // not this game build: nothing of the mod's runs (exe_guard.hpp)
     // The decision needs the data root (worker vs local), which is normally resolved at
     // MenuLayer. Resolving it here as well is safe: it is idempotent, and everything it
     // reads (the save dir, the launch arguments) exists before any mod binary loads.

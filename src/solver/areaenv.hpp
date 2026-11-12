@@ -86,7 +86,7 @@ constexpr size_t kLockX = gdoff::kObjTempOffsetXRelated, kOffX = gdoff::kObjPosi
                  kVarIdx = gdoff::kObjVarianceIndex, kStamp = gdoff::kObjAreaStamp,
                  kMoveSkip = gdoff::kObjAreaMoveSkip;
 #if defined(GEODE_IS_WINDOWS)
-constexpr size_t kPosSlot = 0x4a8;          // virtual, the position getAreaObjectValue reads
+constexpr size_t kPosSlot = gdoff::kObjPositionVtblSlot;   // virtual, the position getAreaObjectValue reads
 #endif
 // V offsets per quantity (processAreaMoveGroupAction / getAreaObjectValue)
 constexpr int kVLen = 0, kVOff = 1, kVOffY = 2, kVMoveX = 8, kVMoveY = 9, kVDist = 10,

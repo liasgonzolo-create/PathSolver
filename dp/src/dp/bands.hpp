@@ -112,20 +112,10 @@ inline std::vector<BandSrcRow> g_bandSrcRows;
 // it2 is the same shape (ball portal at t=14,150, stale ceiling 390, model 375 vs GD
 // 397). Past the end the lookups answer "no row", so the State's portal band decides.
 inline long long g_bandTrackEnd = -1;
-// --bandholdend (g_bandHoldEnd, on; --no-bandholdend is the off arm):...but a worldline that has fired no mode portal since the
-// end keeps the last row. The State's own band is the portal's formula, and where the band is the
-// camera's that formula is not GD's band at all. SubZero 4002 t=21,340: a ball section whose
-// camera band settled at 1,476..1,764 at t=21,024 and stayed there; the recording behind the solve
-// ended at t=21,340, the model fell back to the ball portal's 1,500..1,740, seated the ball on a
-// floor at 1,515 and survived, while GD's ball fell on to 1,495.3 and died on the spike there at
-// 21,341 -- with the last row held the model follows GD to that death. A mode portal fired past
-// the end (lv10's case above) marks the State (kBandPastEnd) and the portal's band decides again.
-// g_bandHoldNow is the stepping State's answer, set at the top of stepOne under the flag.
-inline bool g_bandHoldEnd = true;
 inline thread_local bool g_bandHoldNow = false;
 constexpr uint8_t kBandPastEnd = 32;
 inline bool bandTrackPastEnd(long long t) {
-    return g_bandTrackEnd >= 0 && t > g_bandTrackEnd && !(g_bandHoldEnd && g_bandHoldNow);
+    return g_bandTrackEnd >= 0 && t > g_bandTrackEnd && !g_bandHoldNow;
 }
 // [2026-08-22 r107] **Look up the row at t+1.** The 36 fixups at lv22's vertical
 // entrance (x 20,000..20,090, the section where the band rises at +1.4px/tick)
@@ -186,13 +176,6 @@ inline bool bandTrackKindAt(long long t, BandKind& kind, double& fl, double& ce,
     }
     return true;
 }
-// --bandsrc (default on since 2026-10): a recorded row the MOD marks as the PORTAL's band (src 0) holds a flyer
-// whatever side of it the body is on. checkCollisions clamps the flying modes to whatever
-// getMaxPortalY returns (0x213c38); the "only while y is inside the band" gate below was written for
-// the camera's band (branch A), whose pmin/pmax are not a clamp when the body flies outside them. A
-// custom level's mini swing put on a block's top above the band (y 939, band top 937.89) is pulled
-// back to 928.89 on the next tick in GD. Rows without the column (src -1) keep the gate.
-inline bool g_bandSrc = true;
 // [2026-10-04] --bandowntrack: State::bandBranch bit 4 (kBandOwn) says this worldline's band
 // was written by a portal the recording behind --bandtrack never saw fire. The recording is one
 // route's camera; up to --bandtrackend it is read as truth for every route, so a route that
@@ -202,22 +185,11 @@ inline bool g_bandSrc = true;
 // 630..930 (GD: 840..1140), rode its ceiling at y=915, and was called SOLVED, while GD sank onto
 // a spike at y=862. The anchor at t=18,000 carried GD's band and agreed with GD to the tick, so
 // the replay instruments never saw it. What "seen" means is bandTrackSawBand (below); an anchor
-// whose --startband the recording does not hold at t0 starts with the bit (cli.hpp). Off: the
-// bit is never set.
+// whose --startband the recording does not hold at t0 starts with the bit (cli.hpp). On by default
+// (2026-10-18; --no-bandowntrack is the off arm, where the bit is never set).
 constexpr uint8_t kBandOwn = 16;
 constexpr int kBandOwnNear = 3;   // GD's band changes on the portal's own tick
-inline bool g_bandOwnTrack = false;
-// --bandtrackseen: the mirror of --bandowntrack -- a band change in the recording comes from a portal
-// the recorded route fired, and a worldline that did not fire it keeps its own band. The recorded
-// band is passed over (step.hpp, bandTrackOtherRoute) when the state's own band is still the
-// recording's band from before the change, more than kBandOwnNear ticks after it, and only for rows
-// the mod marks as the portal's band (src 0) -- a camera's band pans for every route.
-// A custom level's spider: the recorded run takes a ship portal at t=212 (band 90..360 -> 90..390);
-// a search from t=76 rides the ceiling instead, never touches the portal, and taps up at t=219 into
-// the recording's 390 (lands at 376.5) where GD lands at 346.5 under its own 360 and dies at t=228
-// on a block the model's ceiling ran over. The search called that route alive to t=1,276. On by
-// default since 2026-10; --no-bandtrackseen turns it off.
-inline bool g_bandTrackSeen = true;
+inline bool g_bandOwnTrack = true;
 inline bool bandTrackAt(long long t, double& fl, double& ce) {
     return bandTrackRowAt(t + 1, fl, ce);
 }
@@ -551,20 +523,25 @@ inline bool bandIsWall(uint8_t branch, bool legacyGridTest) {
 // longer. Known and set only -- an unknown byte keeps the old clamp. On by default since 2026-10-06;
 // --no-flyfree is the off arm.
 inline bool g_flyFree = true;
-// --dualzoomband (default on since 2026-10): a dual cube's or robot's band (--dualcubeband's floor and ceiling)
-// is divided by the camera zoom about its centre, as GD's getMinPortalY / getMaxPortalY give it in
-// branch B (the portal's centre -+ 0.5 * H / zoom). The flying modes' clamp rewrites its ceiling for
-// the zoom; the cube family's took the stored zoom-1 band. A custom level's robot portal in a dual at
-// y 285 under a zoom of 0.85: GD's pmin/pmax read 126.18 / 443.82 = 285 -+ 135 / 0.85 on every tick of
-// the section, and its bodies fell past 165 and rose past 405 (the zoom-1 band's seats), where the
-// model stood them on the band and the game killed them on spikes beneath. Not over a recorded band,
-// which is GD's own value already; only where the zoom is not 1 or the band below is animating.
-// ...and under a Static Camera (branch A) the height is the ground layers', which the dual portal
-// animates in from the screen's 322 like a mode portal does (bandProgress), over the dual's 0.4 s.
-// The same custom level's dual entry: GD's (pmax - pmin) * zoom reads 322 - 52 * p, p eased over 96
-// ticks, while the zoom eases from 0.98 to 0.85 (with --zoomchain, modifiers.hpp, the model's zoom
-// is GD's to 0.000005 there; without it, 0.017 off once the speed changes inside the ease).
-inline bool g_dualZoomBand = true;
+// --groundbandzoom: ...and a single ball's or spider's (outside a dual) the same way, branch B only. A custom level's
+// spider under a zoom of 0.8: GD's pmin/pmax read 116.25 / 453.75 = 285 -+ 135 / 0.8, and at a block's end
+// (t=14,721) it walked off and fell past 163.5 (the zoom-1 band's seat, floor 150); the model stood it on 150 and
+// ran on along it.
+inline bool g_groundBandZoom = true;
+// --camfree: a Camera Mode trigger (id 2925) on the crossing queue writes the Free Mode byte too, from its
+// m_cameraIsFreeMode (the objrects `free` column), on the tick its x is crossed -- after that tick's
+// collisions, like every crossing trigger, so the band it frees is the next tick's (step.hpp, at the step's
+// end). A custom level's ball, mode unchanged: GD's dump turns `freemode` 0 -> 1 on the tick it crosses a
+// 2925 at x 6,180 with free=1, and from there the ball rises past its band's ceiling 1,110 (pmax still
+// reads 1,110), where the model stood it on that ceiling (ground/flipceil). On by default; --no-camfree is
+// the off arm.
+inline bool g_camFree = true;
+struct CamFree {
+    double cx;
+    uint8_t free;
+    int uid;
+};
+inline std::vector<CamFree> g_camFrees;   // sorted by cx at load
 inline bool flyBandFree(uint8_t branch) {
     return g_flyFree && (branch & kBandFreeKnown) && (branch & kBandFree);
 }

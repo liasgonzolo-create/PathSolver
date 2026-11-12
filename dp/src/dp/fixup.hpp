@@ -44,6 +44,9 @@ struct Fixup {
     // The second body, when this was measured on a pair.
     uint8_t dual = 0, gAfter2 = 255;
     float y2 = 0, vy2 = 0, dy2 = 0, dvy2 = 0;
+    // A two-player level's second body has a button of its own: the transition the record was measured on was made with this one (named tail `,in2=`).
+    // 255 = not said (every record of a level that is not two-player, and every record written before the tail), which matches whatever the second body pressed.
+    uint8_t in2 = 255;
     // File position at load. The file is append-only within a run, so a
     // larger ord is a NEWER measurement -- the conflict filter (cli.hpp)
     // keeps the newest of two records that share a key but disagree.
@@ -135,10 +138,13 @@ inline FixupCensusRow fixupCensus() {
 // x=15,350: the single-record A/B killed the replay, the full file did not).
 // Kills are also matched FIRST for the same reason: a verdict must not lose
 // to a trajectory patch from the neighbouring tick.
+// The second body's button of the step being matched, set by stepBoth (-1: the pair shares the first body's button, or there is no pair).
+inline thread_local int t_fixIn2 = -1;
 inline bool fixupMatches(const Fixup& f, const State& s, int input) {
     if ((int)f.in != input || f.mode != s.mode || f.mini != s.mini
         || f.flip != s.flip || f.g != s.grounded)
         return false;
+    if (f.in2 != 255 && t_fixIn2 >= 0 && (int)f.in2 != t_fixIn2) return false;
     // A record measured on one body and a state with two are not the same transition, whatever
     // the first body is doing. Records written before duals were recordable carry dual=0 and so
     // keep matching exactly the states they always did.
@@ -194,7 +200,33 @@ inline const Fixup* findFixup(const std::vector<Fixup>& v, const State& s,
 // y~1,738) and (8,286, y~1,072) are dyn kills, and so were GD's deaths at
 // t=2,416 and 2,842 under the ceiling of group 265, which the gate held off
 // until the ceiling's own timing was right (the autonomous lag, dynamics.hpp).
+// --fixreach (ON since 2026-10-24; --no-fixreach is the off arm): the gate holds a record back only for a moving object that could have taken part in this step -- its box meets the box the player
+// sweeps over the step, the player's own box from where it is to where the step takes it (dxF in x, vy in y; no margin) -- instead of any moving object within hw + 40 px
+// of the player. The flat gate held back the kill record of a custom level's wall at x=28,498 (a mini flipped ship inside a pair of slopes, NULL killer) for ten loop
+// iterations, for two small thorns 22 and 26 px clear of the player's box (hitbox trace, dmg lines at t=20,797: uid 172427 3.3x3.7 and uid 69001 8.6x7.1) that the
+// kill does not involve; neither meets the swept box. The object's own sweep is only what Obj carries of it (its y step dcy, its half-height change dhh): its x step is
+// not in Obj, so an object closing in on the player sideways within the tick is judged from where it stands. An object the recording holds on ONE row, at a tick the
+// recording covers, never moves there and is not a reason to hold a record back (a custom level's Tidal wall at x=81,705: three thorns that never move, one of them the killer).
+// One wall measured; the lv22 corridor the 40 px
+// gate was chosen on (above) is the case to run before this goes on.
+inline bool g_fixNearReach = true;
 inline const Obj* nearDynObjectPtr(const State& s, const StepCtx& K) {
+    if (g_fixNearReach) {
+        const double half = playerHalf(s.mode, s.mini != 0);
+        const double px0 = (double)s.xAbs, px1 = px0 + (double)K.dxF;
+        const double py0 = (double)s.y, py1 = py0 + (double)s.vy;
+        const double pxLo = std::min(px0, px1) - half, pxHi = std::max(px0, px1) + half;
+        const double pyLo = std::min(py0, py1) - half, pyHi = std::max(py0, py1) + half;
+        for (const Obj* o : *K.near) {
+            if (!o->dynObj) continue;
+            // an object the recording holds still, at a tick the recording covers (its trailer `end,<tick>`), has no phase for a record to be wrong about
+            if (o->recStatic && (long long)K.t <= g_groupsEndT) continue;
+            const double hh = o->hh + std::fabs(o->dhh);
+            const double oyLo = std::min(o->cy, o->cy - o->dcy) - hh, oyHi = std::max(o->cy, o->cy - o->dcy) + hh;
+            if (o->cx + o->hw > pxLo && o->cx - o->hw < pxHi && oyHi > pyLo && oyLo < pyHi) return o;
+        }
+        return nullptr;
+    }
     for (const Obj* o : *K.near)
         if (o->dynObj
             && std::fabs((double)s.xAbs - o->cx) < o->hw + 40.0
@@ -343,17 +375,23 @@ inline double touchPreY(const State& s, const State& c, bool set, double y) {
     return set ? y : (double)c.y;
 }
 
-inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
+// `input2` is the second body's own button (a plan's input bit 1) in a two-player level (g_twoPlayer); -1, and every call in a level
+// that is not two-player, gives it the first body's, as a dual's two halves always had.
+inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead, int input2 = -1) {
     bool d1 = false;
     g_halfNow = 0;
     g_fxBlockedUid = -1;
+    t_fixIn2 = -1;
     // Out-parameter, not a global: phase 1 steps the layer in parallel.
     bool p1FlippedGravity = false;
     if (g_touchCensus) g_tcBranch = 0;
     g_preBtnSet = false;
+    t_spiderFreshWarp = false;   // --spidertptouch
     t_ringLinkLate = 0;   // --ringtaplink
     State c = stepOne(s, input, K, d1, &p1FlippedGravity);
+    const bool p1FreshWarp = t_spiderFreshWarp;   // p1's, before p2's stepOne can overwrite it
     const bool p1RingLate = t_ringLinkLate != 0;
+    const int p1RingKind = t_ringLinkLate;
     t_ringLinkLate = 0;
     if (g_touchCensus) g_tcBranchP1 = g_tcBranch;
     // p1's pre-button y, saved before p2's stepOne can overwrite it
@@ -364,6 +402,9 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // --p1soloend (constants.hpp): player 1's own pass ended the dual, so there is no second body
     // to step on this tick.
     if (!s.dual || (g_p1SoloEnd && !c.dual)) {
+        // --p2born: the tick a dual portal makes the second body is the tick it is born not holding (3); its level in the
+        // plan does not count until the plan shows it released (below)
+        c.action2 = (g_p2Born && g_twoPlayer && c.dual && !s.dual) ? (uint8_t)3 : (uint8_t)2;   // --dualinlat: no second body, nothing to remember
         dead = d1;
         markTouched(c, K, touchPreY(s, c, preBtnSet, preBtnY), s.action != 0,
                     input != 0 && s.action == 0, &s, input != 0);
@@ -434,7 +475,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
             sb.flip = want;
             sb.vy = (float)((double)sb.vy * 0.5);
             // --ballscaleair: the partner call is a flipGravity, which lowers a ball's +0x728
-            if (g_ballScaleAir && sb.mode == 2) sb.ball728 = (uint8_t)((sb.ball728 & ~3u) | 1u);
+            if (sb.mode == 2) sb.ball728 = (uint8_t)((sb.ball728 & ~3u) | 1u);
         }
     }
     // --ballscaleair: each body's polarity as its own step left it; the partner calls and the repel
@@ -445,8 +486,8 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     g_halfNow = 1;
     // --dualband: the second half's portal band reads p1's finished mode, and says if it wrote
     g_bandPortalWrote = false;
-    if (g_dualBand) g_dualOtherMode = (int)c.mode;
-    g_p2SoloHalf = g_p2Solo;   // --p2solo
+    g_dualOtherMode = (int)c.mode;
+    g_p2SoloHalf = true;   // the second body that has left runs alone (formerly --p2solo)
     g_p2SoloFired = false;
     t_followHalf2 = 1;   // --followy: player 1's y is sb's y2
     t_p2RingFresh = -1;  // --rtlp2ring
@@ -454,9 +495,33 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // p2Widen). Its x comes back to the pair's below, and the offset moves by however much farther
     // one half went than the other this tick -- a teleport trigger takes player 1 alone. Below 0.5 px
     // the two advances are the same step rounded at two magnitudes, and are not a move.
-    const bool p2x = g_p2xOff && s.frame == 0;
+    const bool p2x = s.frame == 0;
     if (p2x && s.dx2 != 0.f) sb.xAbs = (float)((double)sb.xAbs + (double)s.dx2);
-    State cb = stepOne(sb, input, K, d2, &p2FlippedGravity);
+    // --dualinlat (speed.hpp): a second body with the longer input latency (ship, UFO) against a first without takes the
+    // first one's input of the tick before, and sees its own tick before that as its previous button
+    int p2in = input;
+    bool p2Delayed = false;
+    // a two-player level's second body takes its own button, and sees its own previous one (State::action2; the first body's
+    // where nothing has said yet). The latency of its input is its own mode's, which the caller's schedule has already applied.
+    if (g_ghostOn && g_twoPlayer) input2 = ghostLevelAt((long long)K.t);   // the other body's plan (frames.hpp)
+    const bool own2 = g_twoPlayer && input2 >= 0;
+    const bool p2BornNow = g_p2Born && s.action2 == 3;
+    if (own2) {
+        p2in = input2;
+        // --p2born: a body born holding nothing takes the plan's level 1 for a held button only after a press the plan
+        // makes (a level of 0 first): the game gets an input only where the mask changes, and a level that was 1 before
+        // the body existed is no press for it
+        if (p2BornNow && input2 == 1) p2in = 0;
+        sb.action = (s.action2 == 3) ? (uint8_t)0 : ((s.action2 == 2) ? s.action : s.action2);
+        // --p2held (speed.hpp): the second body's wave reads the button it held, not the first body's
+        if (g_p2Held) sb.held = (uint8_t)(sb.action != 0);
+    }
+    if (!own2 && g_dualInLat && (s.mode2 == 1 || s.mode2 == 3) && !(s.mode == 1 || s.mode == 3)) {
+        p2in = (int)s.action;
+        sb.action = (s.action2 == 3) ? (uint8_t)0 : ((s.action2 == 2) ? s.action : s.action2);
+        p2Delayed = true;
+    }
+    State cb = stepOne(sb, p2in, K, d2, &p2FlippedGravity);
     if (p2x) {
         const double moved = ((double)cb.xAbs - (double)sb.xAbs) - ((double)c.xAbs - (double)s.xAbs);
         c.dx2 = (std::fabs(moved) > 0.5) ? (float)((double)s.dx2 + moved) : s.dx2;
@@ -478,6 +543,8 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // counters are ITS fields now, not shared ones (State::mode2 / mini2 say
     // why). SIZE left this list on 2026-08-28: it was the last thing a portal
     // could change for one half while the merge threw the answer away.
+    c.action2 = (p2Delayed || own2) ? (uint8_t)p2in : (uint8_t)2;   // --dualinlat; a two-player level's own button
+    if (p2BornNow && own2 && input2 == 1) c.action2 = 3;   // --p2born: still holding nothing
     c.y2 = cb.y2;            c.vy2 = cb.vy2;
     c.mode2 = cb.mode2;      c.mini2 = cb.mini2;
     c.ceilT2 = cb.ceilT2;    c.ceilM42 = cb.ceilM42;
@@ -497,7 +564,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // stepOne wrote into the swapped slot.
     if (g_dualSlide) c.slideT2 = cb.slideT2;
     // --dualhover: ...and its robot hover budget (State::rHover2)
-    if (g_dualHover) c.rHover2 = cb.rHover2;
+    c.rHover2 = cb.rHover2;
     // --dualdash: ...and its dash (State::dashing2 / dashSlope2), for the same reason
     { c.dashing2 = cb.dashing2; c.dashSlope2 = cb.dashSlope2; }
     c.slopeUid02 = cb.slopeUid02;  c.slopeUidNow2 = cb.slopeUidNow2;
@@ -507,6 +574,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     for (int i = 0; i < 2; ++i) c.spdFired2[i] = cb.spdFired2[i];
     for (int i = 0; i < 2; ++i) c.spdMore2[i] = cb.spdMore2[i];   // --spdsameonce
     c.hitG2 = cb.hitG2;   // --repela0c
+    c.halfPrev2 = cb.halfPrev2;   // --portprevhalf
     // --a1clatch: the second body's +0xa1c is bit 1 (0 in both halves when the flag is off)
     c.a1cLatch = (uint8_t)((c.a1cLatch & 1u) | (cb.a1cLatch & 2u));
     // --ballscaleair: the second body's +0x728 is bits 2-3 (0 in both halves when the flag is off)
@@ -517,6 +585,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
         c.rotNeg2 = cb.rotNeg2;
     }
     c.holdDead2 = cb.holdDead2;
+    if (g_dualJumpBuf) c.jumpBuf2 = cb.jumpBuf2;   // --dualjumpbuf
     { c.flipT2 = cb.flipT2; c.modeT2 = cb.modeT2; }   // --dualflipclock
     for (int i = 0; i < 3; ++i) c.portSeen2[i] = cb.portSeen2[i];
     for (int i = 0; i < 4; ++i) c.touchRing2[i] = cb.touchRing2[i];
@@ -543,10 +612,10 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // cannot carry x, stopped 5 px later.
     if (s.dual && cb.dx != sb.dx) c.dx = cb.dx;
     // --dualband: ...and so does a MODE portal: playerWillSwitchMode calls updateDualGround for
-    // either body, after p1's, so the band the second half wrote is the pair's (frames.hpp
-    // g_dualBand). Taken only when that half's portal wrote it (g_bandPortalWrote); otherwise
+    // either body, after p1's, so the band the second half wrote is the pair's.
+    // Taken only when that half's portal wrote it (g_bandPortalWrote); otherwise
     // p1's stands.
-    if (g_dualBand && s.dual && p2WroteBand) {
+    if (s.dual && p2WroteBand) {
         c.bandFloor = cb.bandFloor;
         c.bandCeil = cb.bandCeil;
         c.bandRefY = cb.bandRefY;
@@ -566,7 +635,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
     // flags as they stand when p2's portal fires -- p1 has finished its pass by then (c.mode), p2
     // has not reached a mode portal after the gravity one (s.mode2).
     if (p2FlippedGravity && s.dual && !unlinked
-        && sameModeFlags(g_dualBornPortal ? c.mode : s.mode, s.mode2)) {
+        && sameModeFlags(c.mode, s.mode2)) {
         const uint8_t want = (uint8_t)!c.flip2;
         if (c.flip != want) {
             c.flip = want;
@@ -584,11 +653,19 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
         const uint8_t want = (uint8_t)!c.flip;
         if (c.flip2 != want) {
             c.flip2 = want;
-            if (g_rtlP2Ring && (p2RingFresh == 11 || p2RingFresh == 12 || p2RingFresh == 35
+            if ((p2RingFresh == 11 || p2RingFresh == 12 || p2RingFresh == 35
                                 || p2RingFresh == 32))
                 c.vy2 = -c.vy2;
             else c.vy2 = (float)((double)c.vy2 * 0.5);
         }
+    }
+    // --dualorblate (speed.hpp): both bodies took a gravity ring on a press that began this tick -- p2's ring turns p2 back and its partner call turns p1 back
+    if (g_dualOrbLate && p1RingKind == 2 && p2RingFresh == 13 && s.dual && !unlinked && sameModeFlags(c.mode, c.mode2)
+        && c.flip != s.flip && c.flip2 != s.flip2 && s.flip != s.flip2) {
+        c.flip = s.flip;
+        c.vy = (float)((double)c.vy * 0.5);
+        c.flip2 = s.flip2;
+        c.vy2 = -c.vy2;
     }
     // Dual mode portal: GD re-MIRRORS the pair. playerWillSwitchMode
     // (0x212ef0) runs per toucher; for the SECOND one the other player is
@@ -668,6 +745,7 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
                     c.pressSpent2 = sb.pressSpent;
                     c.holdDead2 = sb.holdDead;
                     c.hitG2 = p2HitG;
+                    if (g_dualJumpBuf) c.jumpBuf2 = (uint8_t)(input ? 1 : 0);
                 }
             } else {
                 c.flip = (uint8_t)!f1;
@@ -695,19 +773,20 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
         c.mode = cb.mode2;
         c.mini = cb.mini2;
         c.pressSpent = cb.pressSpent2;
+        if (g_dualJumpBuf) c.jumpBuf = cb.jumpBuf2;   // --dualjumpbuf: +0x985 too
         // --dualendrot (constants.hpp): ...but a wave takes the second body's angle, as it eased this tick
-        if (g_dualEndRot && cb.mode2 == 4) c.rot = cb.rot2;
+        if (cb.mode2 == 4) c.rot = cb.rot2;
         c.dual = 0;
         c.onSlope = 0;
         c.slopeM = 0.f;
         c.snapObj = nullptr;
         c.snapDist = 0.f;
         // --p2xoff: ...the position includes x, which is the second body's own once they ran apart
-        if (g_p2xOff && s.frame == 0 && s.dx2 != 0.f) c.xAbs = cb.xAbs;
+        if (s.frame == 0 && s.dx2 != 0.f) c.xAbs = cb.xAbs;
     }
-    if (g_p2xOff && !c.dual) c.dx2 = 0.f;   // --p2xoff: the dual ended, the offset with it
+    if (!c.dual) c.dx2 = 0.f;   // --p2xoff: the dual ended, the offset with it
     // --ballscaleair: a ball whose gravity a partner call or the repel turned after its own step
-    if (g_ballScaleAir && !p2Solo) {
+    if (!p2Solo) {
         if (c.mode == 2 && c.flip != ballF1Own) c.ball728 = (uint8_t)((c.ball728 & ~3u) | 1u);
         if (c.dual && c.mode2 == 2 && c.flip2 != ballF2Own)
             c.ball728 = (uint8_t)((c.ball728 & ~12u) | 4u);
@@ -732,14 +811,17 @@ inline State stepBoth(const State& s, int input, const StepCtx& K, bool& dead) {
             if (std::fabs((double)c.y2 - sp->cy) < sp->hh + 45.0) { c.freeHalf = 0; break; }
         }
     }
-    dead = d1 || d2;
+    dead = d1 || (d2 && !g_ghostOn);   // a ghost (frames.hpp g_ghostOn) is stepped with its plan, and its death ends nothing
+    t_spiderFreshWarp = p1FreshWarp;
     markTouched(c, K, touchPreY(s, c, preBtnSet, preBtnY), s.action != 0,
                     input != 0 && s.action == 0, &s, input != 0);
     // The dual half used to skip this entirely, so a divergence measured in a dual section was
     // unusable even if something had managed to write it down. Applied here, after both bodies
     // are merged, for the same reason the single case applies it after stepOne: the record is
     // GD's answer to the whole transition.
+    t_fixIn2 = own2 ? p2in : -1;   // a record may name the second body's button (Fixup::in2)
     if (!g_fixups.empty()) applyFixup(s, input, c, dead);
+    t_fixIn2 = -1;
     return c;
 }
 

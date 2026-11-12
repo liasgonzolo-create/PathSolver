@@ -29,7 +29,7 @@ public:
     // not depend on which thread ran which chunk -- the output stays
     // bit-identical to the serial run, which is what the whole project rests on.
     void parallelFor(size_t count, const std::function<void(size_t)>& fn) {
-        dispatch(count, fn, kChunk);
+        dispatch(count, fn, chunkFor(count));
     }
     // One task per index. parallelFor's 32-wide chunking is right for the
     // per-child stepping, but with a handful of COARSE tasks (the dedupe
@@ -40,6 +40,14 @@ public:
     }
 
 private:
+    // A short job is cut into about two chunks a thread (down to kChunkMin children each), so that a small group's
+    // step reaches the whole pool instead of two threads or one. Which thread runs which chunk changes nothing in the
+    // result (every index writes its own slot), only how long the job takes: on a level whose frontier splits into
+    // five groups a layer, half of them under 128 parents, the step blocks went from 57% busy to 75%.
+    size_t chunkFor(size_t count) const {
+        const size_t per = count / ((ths_.size() + 1) * 2);
+        return std::max(kChunkMin, std::min(kChunk, per));
+    }
     void dispatch(size_t count, const std::function<void(size_t)>& fn,
                   size_t chunk) {
         // A job no bigger than one chunk per thread is not worth waking anyone
@@ -59,11 +67,17 @@ private:
             chunk_ = chunk;
             next_.store(0, std::memory_order_relaxed);
             done_ = 0;
+            doneSpin_.store(0, std::memory_order_relaxed);
             ++gen_;
             genSpin_.store(gen_, std::memory_order_release);
         }
         cvStart_.notify_all();
         runChunks();          // the caller is a worker too
+        {   // the caller has nothing else to do: wait for the others by spinning first, a kernel wake-up is most of a short job
+            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(kCallerSpinUs);
+            while (doneSpin_.load(std::memory_order_acquire) != ths_.size() && std::chrono::steady_clock::now() < until)
+                std::this_thread::yield();
+        }
         std::unique_lock<std::mutex> lk(m_);
         cvDone_.wait(lk, [this] { return done_ == ths_.size(); });
         fn_ = nullptr;
@@ -96,6 +110,7 @@ private:
             lk.unlock();
             runChunks();
             lk.lock();
+            doneSpin_.store(done_ + 1, std::memory_order_release);
             if (++done_ == ths_.size()) {
                 lk.unlock();
                 cvDone_.notify_one();
@@ -103,6 +118,8 @@ private:
         }
     }
     static constexpr size_t kChunk = 32;
+    static constexpr size_t kChunkMin = 8;
+    static constexpr int kCallerSpinUs = 200;
     size_t chunk_ = kChunk;
     std::vector<std::thread> ths_;
     std::mutex m_;
@@ -112,6 +129,7 @@ private:
     std::atomic<size_t> next_{0};
     size_t gen_ = 0;
     std::atomic<size_t> genSpin_{0};   // gen_, readable without the lock (spin only)
+    std::atomic<size_t> doneSpin_{0};  // done_, readable without the lock (the caller's spin only)
     size_t done_ = 0;
     bool stop_ = false;
 };
@@ -175,7 +193,27 @@ inline double g_speedDodgeMin = 0.0;
 inline double g_glitchPortal = 0.0;
 inline double g_glitchWave = 0.0;
 inline double g_glitchEmbed = 0.0;
-//   --glitchdeco         a decoration that is a hazard's look (90% of its placements sit on
+//   --wavecentre <px>   the wave-behaviour option (Avoid glitches, third choice; 0 = off): a wave that ends
+//                       a tick within this many px of the band's floor or ceiling, of a solid (the faces it
+//                       could slide on included, unlike --glitchwave), or riding a ramp is dropped -- it is
+//                       crawling along the terrain, not flying the corridor. Only the clearance is asked
+//                       for, so a corridor narrower than twice this leaves no wave states (the loop then
+//                       falls back to --glitchwave alone, src/mod/repair.hpp escalate).
+inline double g_waveCentre = 0.0;
+//   --wavetidy <S> / --wavetoggle <T>   a PREFERENCE among wave routes, not a drop (0 = off). The route's own
+//                       State::tight (the goal pick already reads it: lower is roomier) takes, on every wave tick,
+//                       floor(S * off^2) where off is how far the wave sits from the middle of the corridor it is
+//                       in (0 centre, 1 wall; corridor = the band's floor and ceiling and the solids above and
+//                       below), and T for every change of the button. With either on, each layer's frontier is
+//                       put in stable order of that score before it is stepped, so the first-accepted-wins dedupe
+//                       keeps the tidier route into a cell.
+inline double g_waveTidy = 0.0;
+inline int g_waveToggle = 0;
+//   --startedge <ticks>  an anchored call: the ticks the button had already been in its present state at the anchor
+//                        (State::edgeAge of the start state; -1 = not said, which leaves it at "long ago"). The mod
+//                        reads it off the plan the game flew, so --wavepulse / --minpulse hold across a re-anchor.
+inline int g_startEdge = -1;
+//   --glitchdeco        a decoration that is a hazard's look (90% of its placements sit on
 //                        that hazard) and is placed without one is loaded as that hazard
 //                        (level_loader.hpp addHazardLookalikes, where g_glitchDeco lives: the
 //                        loader comes first in the header chain): the hole in lv20's first
@@ -221,6 +259,11 @@ inline double g_coinWinLen = 0.0;
 // On by default since 2026-10-07 (lv22 cold without a section-solver handoff); --no-ladderovercap is the
 // off arm.
 inline bool g_ladderOverCap = true;
+// --ladderovercapstop (off): the second over-cap step (the window at 4x --cap) is skipped for the plain search when the
+// first (2x) left the death where it was: not later than the attempt before it, at the same state count to the
+// state. A long ship/wave level: in 17 whole-level ladder calls the 8000 rung found exactly what the 4000 one had,
+// 53 s of the run's 1,715. Where the 2x step moves the death the 4x step is taken as before.
+inline bool g_ladderOverCapStop = false;
 // --capenvelope (off; --ladderenv passes it to the attempts after a coin's miss prune, cli.hpp
 // cliMain): a class the alive cap thins keeps its lowest and its highest state
 // (by y, then vy, then layer order) before the stride takes the rest of its share. The stride

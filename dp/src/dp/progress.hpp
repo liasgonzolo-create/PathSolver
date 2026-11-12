@@ -149,6 +149,21 @@ struct SearchCheckpoints {
 inline SearchCheckpoints g_check;
 // --phaseprof (cli.hpp): per-phase wall time of the layer loop. Print only.
 inline bool g_phaseProf = false;
+// ...and what its `setup` bucket is made of (search_dp.hpp): [0] the autonomous triggers' crossings, [1] the group keys, [2] the rotation triggers and the group's own crossings,
+// [3] what model.prepare leaves after its own marks, and prepareGroup's: [4] dyn.seek (the moving geometry placed for the tick), [5] dyn.applyTriggers, [6] the near window (the level's
+// static objects and dyn.collect NEAR), [7] the ports/pads/orbs/slopes/speeds windows, [8] the touch boxes, coins and follow lists, [9] the ramp veto index and solidOrderInto.
+// Seconds, summed over the layers; print only, filled only under --phaseprof.
+inline double g_ppSub[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+inline long long g_ppGroups = 0, g_ppParents = 0;   // groups placed, parents stepped (each makes up to two children)
+inline std::atomic<long long> g_ppKidNs{0};           // thread-time spent stepping children (the work inside the step)
+inline long long g_ppStepNs = 0, g_ppSerialGroups = 0;   // wall time of the step blocks, and how many ran on one thread
+inline std::chrono::steady_clock::time_point g_ppSubLast;
+inline void ppSubMark(int b) {
+    if (!g_phaseProf) return;
+    const auto n = std::chrono::steady_clock::now();
+    g_ppSub[b] += std::chrono::duration<double>(n - g_ppSubLast).count();
+    g_ppSubLast = n;
+}
 
 // What the search concluded, for a caller that has no pipe to read.
 //
@@ -204,6 +219,7 @@ struct SearchOutcome {
     long long resimDead = -1;
     long long resimFirst = -1;   // first such tick, -1 = none
     const char* resimWhy = nullptr;  // cause at that tick; a string literal
+    int resimKind = -1;              // its DIE kind (step.hpp kDeath*), -1 = no death
     // ...and WHICH object, at that same tick. The cause is a category --
     // `cube/hazard` is true of every hazard on the level -- so two walks that
     // die at different ticks for the same reason cannot be told apart from the
@@ -305,6 +321,13 @@ struct SearchOutcome {
     // This call wrote its plan file (--out), and the trace beside it. An early return and a
     // cancelled search write neither, and a ladder's files then still hold the search before.
     bool planWritten = false;
+    // --dumpstate (statefile.hpp): the tick the replay wrote its state at (-1 = none written) and the
+    // --start a call taking it up passes beside --start-state, as stdout's `dumpstate-start:` line
+    // carries it (the mod has no pipe). --start-state: the tick the call took its state from (-1 = not
+    // applied).
+    long long dumpT = -1;
+    std::string dumpStart;
+    long long startStateT = -1;
 
     void reset() {
         verdict = VerdictFailed;
@@ -313,7 +336,7 @@ struct SearchOutcome {
         coinWall = -1;
         workStates = 0;
         rejoinBadT = -1; rejoinBadWhy = nullptr;
-        resimDead = -1; resimFirst = -1; resimWhy = nullptr;
+        resimDead = -1; resimFirst = -1; resimWhy = nullptr; resimKind = -1;
         resimUid = -1; resimObjX = 0.f; resimObjY = 0.f; resimTrig = TouchMask{};
         resimFrame = -1;
         needTrigMask = TouchMask{}; needTrigPassed = TouchMask{};
@@ -330,6 +353,9 @@ struct SearchOutcome {
         trigMapSig = 0;
         unsupported.clear();
         ladder.clear();
+        dumpT = -1;
+        dumpStart.clear();
+        startStateT = -1;
         planWritten = false;
     }
 };

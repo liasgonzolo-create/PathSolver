@@ -1,6 +1,7 @@
 // GJBaseGameLayer hook: tick control, fast loop, replay/serve, section solver, tracing.
 #include "mod/playlayer_helpers.hpp"
 #include "mod/profsample.hpp"
+#include "mod/replaystep.hpp"
 #include <Geode/modify/GameObject.hpp>   // cfg objwatch: ActWatchObject
 // For PROCESS_MEMORY_COUNTERS's named fields -- the struct is only used through
 // GetProcAddress("K32GetProcessMemoryInfo"), so nothing links psapi.
@@ -10,7 +11,10 @@
 
 using namespace p1;
 
-// The rest of the player at each entry snapshot, same index as g_snaps (cfg snapplayer): what
+// cfg cpcarryparts: the carry gate asks whether the screen is off (cp_flight.hpp gateMask)
+static const bool s_cpScreenOffSet = (cpflight::g_screenOff = &visibilityPassOff, true);
+
+// The rest of the player at each entry snapshot, same index as g_snaps: what
 // psnap's byte copy cannot carry -- the containers (the slope map, the touched rings and pads) and
 // the pointers to the objects the player stands on, rides or dashes from -- carried by C++
 // assignment, as the section search carries them.
@@ -308,6 +312,7 @@ bool g_actHookOn = false;
 }
 class $modify(ActWatchObject, GameObject) {
     static void onModify(auto& self) {
+        ::gdsolver::exeguard::onModify(self);
         if (auto h = self.getHook("GameObject::activateObject")) {
             g_actHook = h.unwrap();
             g_actHook->setAutoEnable(false);
@@ -342,6 +347,7 @@ inline void syncActWatchHook() {
 // ---- Tracing: frame / step structure ----
 class $modify(GJBaseGameLayer) {
     static void onModify(auto& self) {
+        ::gdsolver::exeguard::onModify(self);
         if (auto h = self.getHook("GJBaseGameLayer::updateObjectSection")) g_updSecHook = h.unwrap();
         if (auto h = self.getHook("GJBaseGameLayer::removeObjectFromSection")) g_remSecHook = h.unwrap();
         secsolve::g_onActive = [] { syncSectionHooks(); };
@@ -905,7 +911,7 @@ class $modify(GJBaseGameLayer) {
                     // Taken before the checkpoint, as the section search takes its head's.
                     std::vector<uint8_t> snapPlayer;
                     SnapExtra extra;
-                    if (g_cfg.snapPlayer && m_player1) {
+                    if (m_player1) {
                         psnap::captureRaw(m_player1, this, snapPlayer);
                         secCaptureDash(extra.dash);
                         if (m_player2) secCaptureDash(extra.dash2, m_player2);
@@ -1266,7 +1272,7 @@ class $modify(GJBaseGameLayer) {
                         // change is accepted against is that the held=1 column
                         // goes to about zero and the held=0 column does not move.
                         pl->m_queuedButtons.clear();
-                        // ...and the player as the pass had it (cfg snapplayer). The checkpoint
+                        // ...and the player as the pass had it. The checkpoint
                         // does not carry all of it: loadFromCheckpoint copies its fields back and
                         // then calls the mode setters, which overwrite some of them again
                         // (m_accelerationOrSpeed goes to 1.5 for a robot, which reads as "the
@@ -1285,7 +1291,7 @@ class $modify(GJBaseGameLayer) {
                         // 8.05); writing the player back over that undid the jump but not the
                         // ring's use, the restored run came apart 104 px, and every snapshot
                         // after it in the pass came apart too, where 51/52 had reproduced.
-                        const bool putPlayer = g_cfg.snapPlayer && m_player1 && !s.player.empty();
+                        const bool putPlayer = m_player1 && !s.player.empty();
                         if (s.held && putPlayer) {
                             m_player1->m_holdingButtons[1] = true;
                             if (m_player2) m_player2->m_holdingButtons[1] = true;
@@ -1479,8 +1485,10 @@ class $modify(GJBaseGameLayer) {
             if (cpflight::g_controlPending) {   // the probe's control: the same plan from the head
                 cpflight::g_controlPending = false;
                 if (auto* pl = PlayLayer::get()) {
-                    cpflight::g_probeCap.controlCarry = cpflight::sigDiff(
-                        cpflight::g_probeCap.sourceSig, cpflight::carrySig(pl));
+                    const cpflight::CarrySig now = cpflight::carrySig(pl);
+                    cpflight::g_probeCap.controlCarry = cpflight::sigDiff(cpflight::g_probeCap.sourceSig, now);
+                    if (g_cfg.cpFlightProbeCarry)
+                        cpflight::g_probeCap.controlVsProbe = cpflight::sigDiff(cpflight::g_probeCap.probeSig, now);
                     cpflight::g_controlStarting = true;
                     pl->resetLevel();
                     cpflight::g_controlStarting = false;
@@ -1555,7 +1563,14 @@ class $modify(GJBaseGameLayer) {
             // (watchat / watchback) set the speed themselves before asking for the reset.
             if (auto* pl = PlayLayer::get()) {
                 log::info("watch: reset level, then resume rendering");
+                // The reset's own visibility pass is what draws a level that is held still (a search holds
+                // it, and no frame reaches PlayLayer::update to run one): with skipRender it would be
+                // skipped here, before real time is back, and the screen came up black. Only a session the panel
+                // started has a screen to come back to; a worker's reset is left as it always was.
+                const bool skipWas = g_cfg.skipRender;
+                if (g_uiSession) g_cfg.skipRender = false;
                 pl->resetLevel();
+                g_cfg.skipRender = skipWas;
                 g_realtimeOverride = true;
                 return;   // this frame ends here
             }
@@ -1722,8 +1737,9 @@ class $modify(GJBaseGameLayer) {
                 std::chrono::steady_clock::now() - solver::g_solveStart).count();
             if (el >= g_watchAfterSec) wantWatch = true;
         }
+        // (not under a section solve's hold, which runs the fast loop on purpose: secRenderHold)
         if (wantWatch && !g_realtimeOverride && g_cfg.fastdt > 0
-            && g_watchStartTick < 0) {
+            && g_watchStartTick < 0 && g_secRenderWas < 0) {
             g_realtimeOverride = true; watchSpeedSet(WATCH_SPEED_1X);
             g_visRefresh = true;
             g_visResetPending = true;
@@ -1785,7 +1801,7 @@ class $modify(GJBaseGameLayer) {
             // Do not advance the whole scheduler (the game layer's update hangs off it too
             // and the physics would break). Advance only the action manager (actions are
             // for visual effects only)
-            if (g_fxSweep && g_cfg.skipRender) {
+            if (g_fxSweep && g_cfg.skipRender && vtimeNow() <= 0.f) {
                 // ...by the game time the last batch actually ran, once batches are cut by wall
                 // time (cfg framebudgetms); without that the sweep ran a full batch's worth per
                 // frame however few ticks the frame had. Off, it is the full batch, as before.
@@ -1869,6 +1885,13 @@ class $modify(GJBaseGameLayer) {
                     if (auto* pl = PlayLayer::get()) pl->resetLevel();
                 }
                 if (i > 0 && takeover::stopsBatch()) break;   // the takeover's checkpoint is in
+                // cfg vtime (hooks_vtime.cpp): one frame's worth of actions per update call, as one update a frame
+                // gives them -- the scheduler has run the action manager for the frame's first call already
+                if (i > 0 && vtimeNow() > 0.f)
+                    if (auto* d = cocos2d::CCDirector::sharedDirector())
+                        if (auto* am = d->getActionManager())
+                            static_cast<ActionManagerTick*>(am)->update(
+                                g_vtScale ? vtimeNow() * d->getScheduler()->getTimeScale() : vtimeNow());
                 { stallwatch::Mark gm(stallwatch::GD_UPDATE);
                   GJBaseGameLayer::update(g_cfg.fastdt); }
                 ++g_lastBatchCalls;
@@ -1901,7 +1924,14 @@ class $modify(GJBaseGameLayer) {
             const int approach =
                 takeover::approachLoops(g_tick, m_player1 ? m_player1->getPositionX() : 0.f);
             const bool seekNow = g_started && !g_sessionOver && (itermap::seeking() || approach > 0);
-            const float stepDt = seekNow ? (1.f / 60.f) : dt;
+            float stepDt = seekNow ? (1.f / 60.f) : dt;
+            // cfg replaystep (replaystep.hpp): the scheduler pass decided how many fixed steps this frame runs.
+            const bool fixedStep = replaystep::active() && replaystep::g_calls >= 0 && !seekNow;
+            const int fixedCalls = fixedStep ? replaystep::g_calls : 0;
+            if (fixedStep) {
+                stepDt = replaystep::stepSeconds();
+                replaystep::g_calls = -1;
+            }
             if (g_started && !g_sessionOver)
                 loops = std::max(loops, std::max(itermap::seekLoops(stepDt), approach));
             // The game is STOPPED: run nothing. Normally the pause branch far above has already
@@ -1941,6 +1971,7 @@ class $modify(GJBaseGameLayer) {
                 }
                 g_endzoneBurn = true;
             }
+            if (fixedStep) loops = fixedCalls;   // 0 when this frame has gathered less than one step
             const bool seekCounts = itermap::seeking();
             if (seekCounts) ++itermap::g_seekFrames;
             // cfg seekblind: screen off up to the last checkpoint slot at or before the target.
@@ -1959,6 +1990,11 @@ class $modify(GJBaseGameLayer) {
                 const int ve = itermap::g_seekVisEvery;
                 itermap::g_seekVisSkip = itermap::g_seekBlindNow
                     || (seekCounts && ve > 1 && i + 1 < loops && (i % ve) != ve - 1);
+                // The scheduler gave the first step of the frame its actions; each further one gets its own, as the fast loop does.
+                if (fixedStep && i > 0)
+                    if (auto* d = cocos2d::CCDirector::sharedDirector())
+                        if (auto* am = d->getActionManager())
+                            static_cast<ActionManagerTick*>(am)->update(stepDt * d->getScheduler()->getTimeScale());
                 stallwatch::Mark gm(stallwatch::GD_UPDATE);
                 GJBaseGameLayer::update(stepDt);   // pinned while seeking; see above
                 itermap::g_seekVisSkip = false;
@@ -2333,11 +2369,11 @@ class $modify(GJBaseGameLayer) {
     // raises later then arrives with the byte down, or during the search, and is refused (the
     // levelComplete hook).
     void secStepBegin(PlayLayer* pl) {
-        static_assert(offsetof(PlayLayer, m_levelEndAnimationStarted) == 0x3570,
+        static_assert(offsetof(PlayLayer, m_levelEndAnimationStarted) == gdoff::kLayerLevelEndAnimStarted,
                       "the byte 0x3aba00 raises and pauseGame tests first");
         if (!pl || !pl->m_levelEndAnimationStarted) return;
         pl->m_levelEndAnimationStarted = false;
-        *(reinterpret_cast<uint8_t*>(pl) + 0x3878) = 0;   // checkForEnd's latch (2.2081)
+        *(reinterpret_cast<uint8_t*>(pl) + gdoff::kPlayLayerEndLatch) = 0;   // checkForEnd's latch
     }
 
     // A checkpoint taken where the physics stands. After a secStep during a mirror transition the
@@ -2411,9 +2447,9 @@ class $modify(GJBaseGameLayer) {
                 int liveCount = -1;
                 {
                     const auto* lb = reinterpret_cast<const uint8_t*>(this);
-                    const long long xs = (*reinterpret_cast<const long long*>(lb + 0x35b8)
-                                          - *reinterpret_cast<const long long*>(lb + 0x35b0)) >> 3;
-                    const long long cv = *reinterpret_cast<const long long*>(lb + 0x3658);
+                    const long long xs = (*reinterpret_cast<const long long*>(lb + gdoff::kLayerNonEffectObjects + 8)
+                                          - *reinterpret_cast<const long long*>(lb + gdoff::kLayerNonEffectObjects)) >> 3;
+                    const long long cv = *reinterpret_cast<const long long*>(lb + gdoff::kLayerNonEffectObjectsSizes);
                     if (outer >= 0 && inner >= 0 && outer < xs && cv) {
                         const long long vp = *reinterpret_cast<const long long*>(cv + (long long)outer * 8);
                         if (vp) {
@@ -2481,6 +2517,9 @@ class $modify(GJBaseGameLayer) {
         if (cpflight::g_objAfter > 0) {
             --cpflight::g_objAfter;
             cpflight::objLine(this, "after-update", g_tick);
+        } else if (g_cfg.cpFlightObjFrom >= 0 && g_tick >= g_cfg.cpFlightObjFrom && g_tick <= g_cfg.cpFlightObjTo) {
+            // cfg cpflightobjfrom / cpflightobjto: every update call in that tick range, in any flight
+            cpflight::objLine(this, ("tick att=" + std::to_string(g_attempt)).c_str(), g_tick);
         }
         if (cpflight::g_next >= 0 && g_tick >= cpflight::g_next)
             if (auto* pl = PlayLayer::get(); pl && static_cast<GJBaseGameLayer*>(pl) == this) cpTake(pl);
@@ -2647,8 +2686,8 @@ class $modify(GJBaseGameLayer) {
         // worker on 2026-10-06, the groupcheck note above), so the position is lent for the call:
         // the cell's centre, updateObjectSection, the real position back.
         if (g_cfg.cpFollowSection && !r.followCells.empty()) {
-            const float kx = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(this) + 0x36a0);
-            const float ky = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(this) + 0x36a4);
+            const float kx = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(this) + gdoff::kLayerSectionSizeX);
+            const float ky = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(this) + gdoff::kLayerSectionSizeY);
             int moved = 0, already = 0, outside = 0, notStart = 0;
             if (kx > 0.f && ky > 0.f) {
                 for (const auto& fc : r.followCells) {
@@ -2756,7 +2795,7 @@ class $modify(GJBaseGameLayer) {
     // The members the takeover reads by name, at the offsets the disassembly reads them at
     // (tryPlaceCheckpoint 0x3a32d0 keeps the pending checkpoint at player+0x890; handleButton
     // 0x2338e0 reads two-player mode at levelSettings+0x154).
-    static_assert(offsetof(PlayerObject, m_pendingCheckpoint) == 0x890, "PlayerObject::m_pendingCheckpoint");
+    static_assert(offsetof(PlayerObject, m_pendingCheckpoint) == gdoff::kPlayerPendingCheckpoint, "PlayerObject::m_pendingCheckpoint");
     static_assert(offsetof(LevelSettingsObject, m_twoPlayerMode) == 0x154, "LevelSettingsObject::m_twoPlayerMode");
 #endif
 
@@ -2773,13 +2812,18 @@ class $modify(GJBaseGameLayer) {
             if (!start) {   // whatever the attempt that died had asked for goes with it
                 takeover::g_cpWanted = false;
                 takeover::dropPending();
+            } else {
+                takeover::g_takeNow = false;   // a key press does not wait for the next attempt
             }
             return;
         }
         if (start) {
             const bool atTick = g_cfg.takeoverAt >= 0 && g_tick >= g_cfg.takeoverAt;
             const bool atX = g_cfg.takeoverX > 0.f && m_player1->getPositionX() >= g_cfg.takeoverX;
-            if (atTick || atX) takeoverTake(pl, takeover::TakeKind::Start);
+            // cfg takeoverkey: the key was pressed (takeover::takeNow), here is the point.
+            const bool byKey = takeover::g_takeNow;
+            takeover::g_takeNow = false;
+            if (atTick || atX || byKey) takeoverTake(pl, takeover::TakeKind::Start);
             return;
         }
         // The game stored its pending checkpoint: the strict one taken when it appeared goes in.
@@ -2853,6 +2897,8 @@ class $modify(GJBaseGameLayer) {
             takeover::g_hasPending = true;
             return;
         }
+        takeover::g_fullInputs = g_cfg.inputs;     // for the replay key's way back (takeoverkey)
+        takeover::g_fullToggles = g_cfg.toggles;
         g_cfg.inputs = c.before;
         g_cfg.toggles.resize(std::min(g_nextToggle, g_cfg.toggles.size()));
         // The person plays at the speed the game runs: back to realtime, which is where the
@@ -3136,6 +3182,9 @@ class $modify(GJBaseGameLayer) {
         auto r = std::make_shared<cpflight::Rec>();
         r->tick = T;
         cpCaptureState(pl, *r);
+        if (g_cfg.cpFlightGaps || g_cfg.cpDisabled) r->gaps = cpflight::gapSig(pl);
+        if (g_cfg.cpFollowFloats) cpflight::captureFollow(pl, *r);
+        if (g_cfg.cpRotNode) cpflight::captureRotNodes(pl, *r);
         if (g_cfg.cpFlightLayerDiff)
             r->layerBytes.assign(reinterpret_cast<const uint8_t*>(pl),
                                  reinterpret_cast<const uint8_t*>(pl) + sizeof(PlayLayer));
@@ -3180,14 +3229,23 @@ class $modify(GJBaseGameLayer) {
             return;
         }
         // The carry once more, at the reset itself (it was judged at the install or the queueing).
-        if (const int d = cpflight::sigDiff(c.set->startSig, cpflight::carrySig(this)); d != 0) {
-            if (c.probe) {
+        const cpflight::CarrySig now = cpflight::carrySig(this);
+        if (const int d = cpflight::sigDiff(c.set->startSig, now); d != 0) {
+            if (c.probe && !g_cfg.cpFlightProbeCarry) {
                 ++cpflight::g_probeSkips;
                 return;
             }
-            cpflight::countCarryMiss(d);
-            pl->resetLevel();
-            return;
+            if (!c.probe && (d & cpflight::gateMask())) {
+                cpflight::countCarryMiss(d & cpflight::gateMask());
+                pl->resetLevel();
+                return;
+            }
+        }
+        // cfg cpflightprobecarry: the probe is flown whatever it inherits, and what it inherits is
+        // taken here, at its own reset
+        if (c.probe && g_cfg.cpFlightProbeCarry) {
+            cpflight::g_probeInherit = now;
+            cpflight::g_probeInheritDiff = cpflight::sigDiff(c.set->startSig, now);
         }
         const auto t0 = std::chrono::steady_clock::now();
         clearCheckpointsUnsectioned(pl);
@@ -3198,6 +3256,12 @@ class $modify(GJBaseGameLayer) {
         g_restorePending = false;
         cpflight::g_starting = nullptr;
         cpRestoreState(pl, r, true);
+        // cfg cpdisabled / cpfollowfloats: what the checkpoint itself does not bring back
+        int disabledPut = -1;
+        if (g_cfg.cpDisabled) disabledPut = cpflight::restoreDisabled(pl, r.gaps);
+        if (g_cfg.cpFollowFloats) cpflight::restoreFollow(pl, r);
+        int rotPut = -1;
+        if (g_cfg.cpRotNode) rotPut = cpflight::restoreRotNodes(r);
         cpflight::objLine(this, "restored", r.tick);
         cpflight::nodeWatch(this, r.tick, "restored");
         if (g_cfg.cpFlightObj >= 0) cpflight::g_objAfter = 3;
@@ -3249,6 +3313,20 @@ class $modify(GJBaseGameLayer) {
                  (double)row.x, c.set->attempt,
                  c.probe ? (", which died at t=" + std::to_string(c.set->end)).c_str() : "", ms);
         writeResult(b);
+        // cfg cpflightgaps (print only): what the restore left different from the take
+        if (g_cfg.cpFlightGaps && r.gaps.have) {
+            std::string line;
+            const int d = cpflight::gapDiff(r.gaps, cpflight::gapSig(pl), &line);
+            ++cpflight::g_gapChecks;
+            for (int k = 0; k < cpflight::kGapParts; ++k)
+                if (d & (1 << k)) ++cpflight::g_gapPart[k];
+            writeResult("cpflight: gaps after the restore at t=" + std::to_string(r.tick) + " (take / now): " + line
+                        + (disabledPut >= 0 ? " | cpdisabled put " + std::to_string(disabledPut) + " object(s) back"
+                                            : std::string())
+                        + (rotPut >= 0 ? " | cprotnode put " + std::to_string(rotPut) + " of "
+                                             + std::to_string(r.rotNodes.size()) + " rotation(s) back"
+                                       : std::string()));
+        }
     }
 
     // Measure whether a player-only restore can replace a full checkpoint restore
@@ -3370,7 +3448,7 @@ class $modify(GJBaseGameLayer) {
         const float dt = g_cfg.fastdt;
         int held = 0;
         for (const auto& in : g_cfg.inputs)
-            if (in.step <= g_ckptTick) held = in.down ? 1 : 0;
+            if (in.step <= g_ckptTick && !in.p2) held = in.down ? 1 : 0;
         secRestore(pl);
         for (int i = 0; i < 2; ++i) secStep(held, dt);   // the frozen ticks
         std::vector<float> px((size_t)nobj), py((size_t)nobj);
@@ -3634,7 +3712,7 @@ class $modify(GJBaseGameLayer) {
 
         int held = 0;
         for (const auto& in : g_cfg.inputs)
-            if (in.step <= g_ckptTick) held = in.down ? 1 : 0;
+            if (in.step <= g_ckptTick && !in.p2) held = in.down ? 1 : 0;
         secsolve::setSearching(true);
         int freeze = 0;
         std::vector<uint64_t> base, again, after;
@@ -3755,7 +3833,7 @@ class $modify(GJBaseGameLayer) {
         // The held state at the section head (the value of pattern "keep")
         int held0 = 0;
         for (const auto& in : g_cfg.inputs)
-            if (in.step <= g_ckptTick) held0 = in.down ? 1 : 0;
+            if (in.step <= g_ckptTick && !in.p2) held0 = in.down ? 1 : 0;
 
         // Input patterns. The every-tick toggle must be included. The layered BFS branches
         // both ways every tick, so psnap is unusable unless hold boundaries pass -- that is
@@ -4065,7 +4143,7 @@ class $modify(GJBaseGameLayer) {
         size_t idx = 0;
         for (long long t = 0; t <= base + (long long)seq.size(); ++t) {
             while (idx < g_cfg.inputs.size() && g_cfg.inputs[idx].step <= t) {
-                held = g_cfg.inputs[idx].down ? 1 : 0;
+                if (!g_cfg.inputs[idx].p2) held = g_cfg.inputs[idx].down ? 1 : 0;
                 ++idx;
             }
             if (t >= base && (size_t)(t - base) < seq.size())
@@ -4728,22 +4806,29 @@ class $modify(GJBaseGameLayer) {
                 // 400 and putting the whole machine into swap (lv20's ship section fell to
                 // 9 s/layer; psnap is normally 7ms/layer). Only snaps used swap correctly;
                 // the other three were assignments.
+                postmortem::g_secPhase = 80;
                 if ((size_t)ni < snaps.size())
                     std::vector<uint8_t>().swap(snaps[(size_t)ni]);
+                postmortem::g_secPhase = 81;
                 if ((size_t)ni < pulses.size()) {
                     psnap::EMSnap tmp;
                     std::swap(pulses[(size_t)ni], tmp);
                 }
+                postmortem::g_secPhase = 82;
                 if ((size_t)ni < states.size() && states[(size_t)ni])
                     statePool.push_back(std::move(states[(size_t)ni]));
+                postmortem::g_secPhase = 83;
                 if ((size_t)ni < touches.size()) touches[(size_t)ni].reset();
+                postmortem::g_secPhase = 84;
                 if ((size_t)ni < worlds.size())
                     std::vector<uint8_t>().swap(worlds[(size_t)ni]);
                 // The used-object bytes too (up to 533 a node, 316 MB over one search of
                 // a custom level) -- except a cross-check anchor's, which the next cross-check puts
                 // back at its replay's origin. The anchor swap below frees those.
+                postmortem::g_secPhase = 85;
                 if ((size_t)ni < acts.size() && !g_anchors.count(ni))
                     std::vector<uint8_t>().swap(acts[(size_t)ni]);
+                postmortem::g_secPhase = 86;
                 if (g_snapOn) return;                  // the psnap path holds no checkpoint
             }
             if ((size_t)ni >= g_cps.size()) return;
@@ -4939,7 +5024,7 @@ class $modify(GJBaseGameLayer) {
             int held = 0;
             for (const auto& in : g_cfg.inputs) {
                 if (in.step > tHere) break;
-                held = in.down ? 1 : 0;
+                if (!in.p2) held = in.down ? 1 : 0;
             }
             return held;
         };
@@ -4962,7 +5047,7 @@ class $modify(GJBaseGameLayer) {
         };
         // An exception out of the search gives the search up, not the game. The search's coroutine
         // would hand it to std::terminate (SecTask's unhandled_exception), which ended the whole
-        // game: MOAI's window at t=9,628 (depth 1,654) threw "vector too long" at depth 66 in every
+        // game: a custom level's window at t=9,628 (depth 1,654) threw "vector too long" at depth 66 in every
         // run, with and without cfg cpflight. Caught around the layers, it ends only the search: the
         // layer being built is let go, the verdict is EXHAUSTED with stop=exception, and everything
         // after the layers -- the checkpoints and anchors released, the rung's hand-back, the level
@@ -6668,11 +6753,26 @@ class $modify(GJBaseGameLayer) {
             while (g_nextInput < g_cfg.inputs.size()
                    && g_cfg.inputs[g_nextInput].step <= g_tick) {
                 auto& in = g_cfg.inputs[g_nextInput];
-                ev("INJECT_handleButton", in.step, in.down);
+                // A plan's player 2 edge (input bit 1) is a second button of its own only in a two-player level.
+                // Elsewhere GD routes a player-2 press to player 1 (takeover.hpp noteInput), which would turn the
+                // edge into a jump of player 1 -- so there it is not pressed, and said once.
+                // The text of that line is also how the harness tells a package that has this input path from one that
+                // does not (py/gdtas/gdbase.py PLAYER2_INPUT_MARK): reword it there too, or the guard lets plans through.
+                const bool twoPlayerLevel = m_levelSettings && m_levelSettings->m_twoPlayerMode;
+                if (in.p2 && !twoPlayerLevel) {
+                    static bool said = false;
+                    if (!said) {
+                        said = true;
+                        writeResult("plan: a player 2 input (bit 1) in a level that is not two-player - not pressed");
+                    }
+                    ++g_nextInput;
+                    continue;
+                }
+                ev("INJECT_handleButton", in.step, in.down, in.p2);
                 g_injecting = true;
-                this->handleButton(in.down, 1 /*jump*/, true /*player1*/);
+                this->handleButton(in.down, 1 /*jump*/, !in.p2 /*player1*/);
                 g_injecting = false;
-                if (in.down) orbtrace::g_lastPress = g_tick;
+                if (in.down && !in.p2) orbtrace::g_lastPress = g_tick;
                 ++solver::g_injThisAttempt;
                 ++g_nextInput;
             }
@@ -7306,7 +7406,20 @@ class $modify(GJBaseGameLayer) {
             // ticks, so 40k is pure pathology.
             static int s_overFired = -1;   // once per attempt -- this runs per TICK, and
                                            // unlatched it wrote 1,800 lines per frame
-            if (g_tick > 40000 && s_overFired != g_attempt && !endzoneGrace) {
+            // ...except that a level can be longer than that: one custom level runs ~52,000 ticks (84,333 px at
+            // 1.3 px a tick and up), and this put down every plan that was still alive at 40,000, which the
+            // loop read as a death and, over the empty floor it had run on, as a void run to close. The bound
+            // is the longer of 40,000 and the level's length at the slowest speed (0.7x = 0.909 px a tick).
+            static long long s_stallBound = 40000;
+            static int s_boundAttempt = -1;   // read once per attempt, on its first tick past 40,000
+            if (g_tick > 40000 && s_boundAttempt != g_attempt) {
+                s_boundAttempt = g_attempt;
+                s_stallBound = 40000;
+                if (g_cfg.stallBound)
+                if (auto* plb = PlayLayer::get())
+                    s_stallBound = std::max<long long>(40000, (long long)((double)plb->m_levelLength / 0.9) + 4000);
+            }
+            if (g_tick > 40000 && g_tick > s_stallBound && s_overFired != g_attempt && !endzoneGrace) {
                 s_overFired = g_attempt;
                 char ob2[160];
                 snprintf(ob2, sizeof(ob2), "stall: attempt=%d has run %lld ticks without "
