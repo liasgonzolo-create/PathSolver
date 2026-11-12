@@ -906,6 +906,7 @@ constexpr int kFineTriesPerLadder = 4;
 // nothing left: there it costs only the levels that have already failed without it.
 constexpr long long kCapTiers[] = {16000, 40000};
 constexpr double kTierYq = 0.5, kTierVq = 2.5;
+inline bool g_sectionHuman = true;   // the settings page's "section-human": the section search keeps the hold rules
 inline int g_humanMinPulse = 0;   // --minpulse for this session (0 = off)
 inline int g_capTier = 0;    // 0 = the base setting
 inline bool g_capEnvNow = false;   // cfg dpcapenvrepeat: the searches are asked for --capenvelope (until the run is deeper)
@@ -7180,6 +7181,7 @@ inline void start(GJBaseGameLayer* l) {
     dpbridge::checkSubscribe(g_cfg.dpCheck);
     // The settings page's "Human style", read on the game's thread once for the session; a cfg
     // dpminpulse in autorun.cfg has the last word.
+    g_sectionHuman = Mod::get()->getSettingValue<bool>("section-human");
     g_humanMinPulse = g_cfg.dpMinPulse > 0
                           ? g_cfg.dpMinPulse
                           : (int)Mod::get()->getSettingValue<int64_t>("human-min-click");

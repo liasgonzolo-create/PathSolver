@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.6",
+	"version": "v2.1.0-alpha.7",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -168,6 +168,12 @@
 			"default": 10,
 			"min": 0,
 			"max": 30
+		},
+		"section-human": {
+			"type": "bool",
+			"name": "Hard spots: keep the human click rules",
+			"description": "When the solver hands a hard stretch to its in-game section search, that search also keeps the minimum click length and the wave's minimum hold, so it cannot answer with spam. If a level stops solving at one spot with this on, turn it off and solve again. Needs a new solve.",
+			"default": true
 		}
 	}
 }

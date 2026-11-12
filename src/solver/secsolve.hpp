@@ -745,6 +745,28 @@ struct Node {
     float y2;
 };
 inline std::vector<Node> g_nodes;
+// Path Solver: the hold rules of the model's searches (--minpulse, --wavepulse), asked of the section search
+// too. A child whose button differs from its parent's is dropped when the parent's button had been in its
+// state for fewer than the minimum ticks (the wave's own minimum when the player is a wave). A run that
+// reaches the section head is not judged: what the button did before the section is not in the table.
+inline int g_minHoldAll = 0;
+inline int g_minHoldWave = 0;
+inline long long g_holdDropped = 0;
+inline bool changedTooSoon(int parent, int input, bool wave) {
+    const int need = std::max(g_minHoldAll, wave ? g_minHoldWave : 0);
+    if (need <= 1 || parent < 0 || (size_t)parent >= g_nodes.size()) return false;
+    const int held = g_nodes[(size_t)parent].in & 1;
+    if (held == (input & 1)) return false;
+    int run = 1, i = parent;
+    while (run < need) {
+        const int pp = g_nodes[(size_t)i].parent;
+        if (pp < 0 || (size_t)pp >= g_nodes.size()) return false;
+        if ((g_nodes[(size_t)pp].in & 1) != held) break;
+        ++run;
+        i = pp;
+    }
+    return run < need;
+}
 // THE CHECKPOINT DOES NOT CARRY EVERY PLAYER MEMBER (cfg `seccpplayer`, on). A load puts back
 // what GD's checkpoint saves and leaves the rest of the player as the last run left it. On the
 // section search's checkpoint paths -- the head, a cross-check's replay origins, a leaf's replay,

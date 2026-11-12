@@ -4436,6 +4436,10 @@ class $modify(GJBaseGameLayer) {
         secsolve::g_keepDropped = 0;   // cfg seckeepsize's count, this search
         // Path Solver: the mode portals and the margin for this search (secsolve.hpp slippedPastPortal).
         secsolve::g_portalDropped = 0;
+        secsolve::g_holdDropped = 0;
+        secsolve::g_minHoldAll = dpsolve::g_sectionHuman ? dpsolve::g_humanMinPulse : 0;
+        secsolve::g_minHoldWave =
+            (dpsolve::g_sectionHuman && g_cfg.wavePulse > 1 && !dpsolve::g_waveRelaxed) ? g_cfg.wavePulse : 0;
         secsolve::g_portalSkipNodes.clear();
         secsolve::g_modePortals.clear();
         secsolve::g_portalMargin =
@@ -5635,6 +5639,10 @@ class $modify(GJBaseGameLayer) {
                     nxt.push_back((int)g_nodes.size() - 1);
                     if (secsolve::slippedPastPortal(p, (double)g_nodes[(size_t)ni].x))
                         secsolve::g_portalSkipNodes.push_back(nxt.back());
+                    else if (secsolve::changedTooSoon(ni, branch, p && p->m_isDart)) {
+                        secsolve::g_portalSkipNodes.push_back(nxt.back());
+                        ++secsolve::g_holdDropped;
+                    }
                     if (isSpine) g_spineNext = nxt.back();
                     cpPeak = std::max(cpPeak, (long long)(cur.size() + nxt.size()));
                 }
