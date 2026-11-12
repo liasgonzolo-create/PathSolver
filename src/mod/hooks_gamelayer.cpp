@@ -4434,6 +4434,16 @@ class $modify(GJBaseGameLayer) {
         g_nodes.clear();
         releaseAnchors();
         secsolve::g_keepDropped = 0;   // cfg seckeepsize's count, this search
+        // Path Solver: the mode portals and the margin for this search (secsolve.hpp slippedPastPortal).
+        secsolve::g_portalDropped = 0;
+        secsolve::g_portalSkipNodes.clear();
+        secsolve::g_modePortals.clear();
+        secsolve::g_portalMargin =
+            g_cfg.glitchPortal
+            * (double)dpsolve::kGlitchStageScale[std::clamp(dpsolve::g_glitchStage, 0, dpsolve::kGlitchStages - 1)];
+        if (secsolve::g_portalMargin > 0.0 && m_objects)
+            for (auto* o : CCArrayExt<GameObject*>(m_objects))
+                if (o && secsolve::portalMode(o) >= 0) secsolve::g_modePortals.push_back(o);
         // The head's `in` is the button as the checkpoint caught it (g_headHeld), not 0. The
         // expansion restores every node with its own `in` -- the head included -- and a head
         // stored as released turned the first held step of every branch into a fresh press.
@@ -5623,6 +5633,8 @@ class $modify(GJBaseGameLayer) {
                         }
                     }
                     nxt.push_back((int)g_nodes.size() - 1);
+                    if (secsolve::slippedPastPortal(p, (double)g_nodes[(size_t)ni].x))
+                        secsolve::g_portalSkipNodes.push_back(nxt.back());
                     if (isSpine) g_spineNext = nxt.back();
                     cpPeak = std::max(cpPeak, (long long)(cur.size() + nxt.size()));
                 }
@@ -5643,6 +5655,21 @@ class $modify(GJBaseGameLayer) {
             // it by accident, and the layer being cap+1 wide costs nothing.
             // cfg seckeepsize: a branch that changed player 1's size is not the route asked for,
             // and neither is the spine once it does.
+            // Path Solver: ...and neither is one that slipped beside a mode portal (Avoid glitches).
+            if (!secsolve::g_portalSkipNodes.empty()) {
+                size_t w = 0;
+                for (int ni : nxt) {
+                    const bool skip = std::find(secsolve::g_portalSkipNodes.begin(), secsolve::g_portalSkipNodes.end(), ni)
+                                      != secsolve::g_portalSkipNodes.end();
+                    if (!skip) nxt[w++] = ni;
+                    else {
+                        releaseCp(ni);
+                        ++secsolve::g_portalDropped;
+                    }
+                }
+                nxt.resize(w);
+                secsolve::g_portalSkipNodes.clear();
+            }
             if (secsolve::g_keepP1Size >= 0) {
                 size_t w = 0;
                 for (int ni : nxt) {

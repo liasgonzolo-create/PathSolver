@@ -88,6 +88,59 @@ inline int g_forceP1Size = -1;
 // cfg `seckeepsize` (off = -1): every branch whose player 1 is not this size (0 normal, 1 mini)
 // is dropped, the spine included -- a search for the route that keeps the size.
 inline int g_keepP1Size = -1;
+// Path Solver: the section search knows nothing of Avoid glitches, so a wall handed to it could be
+// passed by slipping beside a mode portal. With a margin (px, the eased glitch-portal margin, 0 = off)
+// a branch whose player leaves a mode portal's x span this tick, without having taken its mode and
+// with less than the margin between the two boxes, is dropped like a branch that changed size.
+inline double g_portalMargin = 0.0;
+inline std::vector<GameObject*> g_modePortals;   // collected at the search's start
+inline std::vector<int> g_portalSkipNodes;       // this layer's children to drop
+inline long long g_portalDropped = 0;
+// The mode a portal gives: 0 cube 1 ship 2 ball 3 ufo 4 wave 5 robot 6 spider 7 swing, -1 = not a mode portal.
+inline int portalMode(GameObject* o) {
+    switch (o->m_objectType) {
+        case GameObjectType::CubePortal: return 0;
+        case GameObjectType::ShipPortal: return 1;
+        case GameObjectType::BallPortal: return 2;
+        case GameObjectType::UfoPortal: return 3;
+        case GameObjectType::WavePortal: return 4;
+        case GameObjectType::RobotPortal: return 5;
+        case GameObjectType::SpiderPortal: return 6;
+        case GameObjectType::SwingPortal: return 7;
+        default: return -1;
+    }
+}
+inline int playerMode(PlayerObject* p) {
+    if (p->m_isShip) return 1;
+    if (p->m_isBall) return 2;
+    if (p->m_isBird) return 3;
+    if (p->m_isDart) return 4;
+    if (p->m_isRobot) return 5;
+    if (p->m_isSpider) return 6;
+    if (p->m_isSwing) return 7;
+    return 0;
+}
+// Did the player, moving right from x `prevX` to where it is now, just leave a mode portal it slipped beside?
+inline bool slippedPastPortal(PlayerObject* p, double prevX) {
+    if (g_portalMargin <= 0.0 || g_modePortals.empty() || !p) return false;
+    const cocos2d::CCRect pr = p->getObjectRect();
+    const double half = 0.5 * (double)pr.size.width;
+    const double leftNow = (double)pr.getMinX();
+    const double leftPrev = prevX - half;
+    if (!(leftNow > leftPrev)) return false;   // not moving right: not judged
+    const int mode = playerMode(p);
+    for (GameObject* o : g_modePortals) {
+        if (o->m_isGroupDisabled || o->m_isGroupDisabledTemp) continue;
+        if (portalMode(o) == mode) continue;   // taken, or it would change nothing
+        const cocos2d::CCRect r = o->getObjectRect();
+        const double right = (double)r.getMaxX();
+        if (!(leftPrev <= right && leftNow > right)) continue;   // its far edge was not crossed this tick
+        const double gap = std::max((double)pr.getMinY() - (double)r.getMaxY(),
+                                    (double)r.getMinY() - (double)pr.getMaxY());
+        if (gap > 0.0 && gap < g_portalMargin) return true;
+    }
+    return false;
+}
 inline long long g_keepDropped = 0;   // branches dropped for it, this search
 // ---- exit conditions (other than x) -----------------------------------------
 // The axis of travel is NOT necessarily x. lv22's x≈2,266 is a 90-degree
