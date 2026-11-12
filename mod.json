@@ -1,0 +1,69 @@
+{
+    "geode": "5.0.0",
+    "gd": {
+        "win": "2.2081",
+        "android": "2.2081",
+        "mac": "2.2081",
+        "ios": "2.2081"
+    },
+    "id": "pathsolver.path-solver",
+    "name": "Path Solver",
+    "version": "v1.0.0",
+    "developer": "PathSolver",
+    "description": "Auto-solves a level into a clean, low-click macro and shows a live progress map.",
+    "tags": ["gameplay", "utility", "cheat"],
+    "settings": {
+        "sim-budget-ms": {
+            "type": "int",
+            "name": "Solver time per frame (ms)",
+            "description": "How many milliseconds of every frame the solver may spend simulating. Higher = faster solving, choppier map.",
+            "default": 12, "min": 2, "max": 40
+        },
+        "checkpoint-interval": {
+            "type": "int",
+            "name": "Checkpoint spacing (ticks)",
+            "description": "Ticks (1/240 s) between solver checkpoints. Lower = faster retries but more memory on trigger-heavy levels.",
+            "default": 24, "min": 4, "max": 240
+        },
+        "min-press-ticks": {
+            "type": "int",
+            "name": "Shortest click (ticks)",
+            "description": "No hold in the macro will be shorter than this. 6 ticks = 25 ms.",
+            "default": 6, "min": 1, "max": 30
+        },
+        "min-gap-ticks": {
+            "type": "int",
+            "name": "Shortest gap between clicks (ticks)",
+            "description": "Two clicks closer together than this are merged into one hold.",
+            "default": 6, "min": 1, "max": 30
+        },
+        "prune-clicks": {
+            "type": "bool",
+            "name": "Remove extra clicks",
+            "description": "After a solution is found, try deleting and merging every click and keep each change that still beats the level.",
+            "default": true
+        },
+        "show-map": {
+            "type": "bool",
+            "name": "Show progress map while solving",
+            "default": true
+        },
+        "playback-map": {
+            "type": "bool",
+            "name": "Show progress map during playback",
+            "default": false
+        },
+        "seed": {
+            "type": "int",
+            "name": "Random seed",
+            "description": "Same seed + same level = same macro.",
+            "default": 1337, "min": 0, "max": 999999
+        },
+        "export-frame-offset": {
+            "type": "int",
+            "name": "Export frame offset",
+            "description": "Added to every frame in the saved .gdr.json. Only change this if the macro is off by a frame in another bot.",
+            "default": 0, "min": -4, "max": 4
+        }
+    }
+}
