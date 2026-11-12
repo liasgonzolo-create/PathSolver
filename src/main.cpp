@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -33,14 +34,19 @@ class $modify(PSBaseLayer, GJBaseGameLayer) {
             return;
         }
 
-        auto start = std::chrono::steady_clock::now();
+        if (s.paused) return; // F2: hold everything still
+        using Clock = std::chrono::steady_clock;
+        auto start = Clock::now();
         auto budget = std::chrono::milliseconds(s.budgetMs);
         do {
             if (s.preStep(pl)) {
+                auto t0 = Clock::now();
                 GJBaseGameLayer::update(ps::TICKF);
+                s.perf.usSim += std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - t0).count();
+                ++s.perf.ticks;
                 s.postStep(pl);
             }
-        } while (s.solving() && std::chrono::steady_clock::now() - start < budget);
+        } while (s.solving() && Clock::now() - start < budget);
     }
 
     // Real key presses are ignored while the bot owns the button.
@@ -163,5 +169,29 @@ class $modify(PSPauseLayer, PauseLayer) {
         if (s.phase == Phase::Playback) s.stop(PlayLayer::get());
         else s.startPlayback();
         this->onResume(nullptr);
+    }
+};
+
+// Hotkeys, only while the solver or a macro is running.
+class $modify(PSKeyboard, CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat, double timestamp) {
+        auto& s = Solver::get();
+        auto pl = PlayLayer::get();
+        if (pl && s.active() && down && !repeat) {
+            switch (key) {
+                case KEY_F1: s.showOverlay = !s.showOverlay; return true;
+                case KEY_F2: if (s.solving()) s.paused = !s.paused; return true;
+                case KEY_F5: s.renderOff = !s.renderOff; s.applyRender(pl); return true;
+                case KEY_F10: s.showMap = !s.showMap; return true;
+                case KEY_Up:
+                case KEY_ArrowUp:
+                    s.budgetMs = std::min(80, s.budgetMs + 5); s.m_budgetTouched = true; return true;
+                case KEY_Down:
+                case KEY_ArrowDown:
+                    s.budgetMs = std::max(2, s.budgetMs - 5); s.m_budgetTouched = true; return true;
+                default: break;
+            }
+        }
+        return CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, timestamp);
     }
 };

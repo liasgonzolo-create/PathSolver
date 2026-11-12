@@ -17,7 +17,7 @@
             "type": "int",
             "name": "Solver time per frame (ms)",
             "description": "How many milliseconds of every frame the solver may spend simulating. Higher = faster solving, choppier map.",
-            "default": 12, "min": 2, "max": 40
+            "default": 25, "min": 2, "max": 80
         },
         "checkpoint-interval": {
             "type": "int",

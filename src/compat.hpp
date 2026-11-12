@@ -22,6 +22,11 @@ inline bool isPlatformer(PlayLayer* pl) { return pl->m_isPlatformer; }
 inline float levelLength(PlayLayer* pl) { return pl->m_levelLength; }
 inline bool& testMode(PlayLayer* pl) { return pl->m_isTestMode; }
 
+// Show / hide everything the level draws (objects, players, effects).
+inline void setWorldVisible(PlayLayer* pl, bool visible) {
+    if (pl->m_objectLayer) pl->m_objectLayer->setVisible(visible);
+}
+
 inline int getAttempts(GJGameLevel* l) { return l->m_attempts.value(); }
 inline void setAttempts(GJGameLevel* l, int v) { l->m_attempts = v; }
 inline int levelId(GJGameLevel* l) { return l->m_levelID.value(); }

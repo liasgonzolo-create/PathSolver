@@ -1,6 +1,7 @@
 #pragma once
 #include <Geode/Geode.hpp>
 #include <array>
+#include <chrono>
 #include <climits>
 #include <random>
 #include <string>
@@ -24,6 +25,13 @@ struct Stats {
     int clicksBefore = 0;
     int window = 0;     // current look-back window in ticks
     int cpFaults = 0;   // respawns that landed off the plan and forced a full replay
+};
+
+// Where the time goes, so the overlay can show real speed numbers.
+struct Perf {
+    uint64_t ticks = 0, usSim = 0;      // game ticks simulated and time spent in them
+    uint64_t resets = 0, usReset = 0;   // rewinds and time spent in them
+    uint64_t cps = 0, usCp = 0;         // checkpoints made and time spent making them
 };
 
 // How it works
@@ -52,7 +60,16 @@ public:
     std::array<int, 200> deathBins{};
     std::vector<Sample> recentDeaths;
     std::string status = "idle";
-    int budgetMs = 12;
+    int budgetMs = 25;
+    Perf perf;
+    bool paused = false;        // F2
+    bool renderOff = true;      // F5: hide the level while solving (much faster)
+    bool showOverlay = true;    // F1
+    bool showMap = true;        // F10
+    int anchorTick = 0;         // tick the current try was rewound to
+    std::chrono::steady_clock::time_point startTime;
+    float pruneProgress() const { return plan.empty() ? 1.f : 1.f - static_cast<float>(m_pruneCursor) / plan.size(); }
+    void applyRender(PlayLayer* pl);
 
     bool active() const { return phase != Phase::Idle; }
     bool solving() const { return phase == Phase::Search || phase == Phase::Verify || phase == Phase::Prune; }
@@ -100,6 +117,9 @@ private:
     bool m_held = false, m_injecting = false, m_died = false, m_completed = false;
     bool m_pruneDone = false, m_everCompleted = false, m_usedMacro = false;
     bool m_inReset = false, m_prune = true;
+public:
+    bool m_budgetTouched = false; // Up/Down was used; keep that speed
+private:
     std::vector<int> m_cpTicks;      // tick of every checkpoint we own, oldest first
     int m_cpValidLimit = INT_MAX;    // checkpoints after this tick are off the accepted path
     int m_recordD = -1000, m_slack = 0, m_tickOffset = 0, m_lastCpTick = 0;

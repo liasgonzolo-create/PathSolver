@@ -17,6 +17,11 @@ Solver& Solver::get() {
     return s;
 }
 
+using Clock = std::chrono::steady_clock;
+static uint64_t usSince(Clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - t0).count();
+}
+
 static int settingInt(const char* key) {
     return static_cast<int>(Mod::get()->getSettingValue<int64_t>(key));
 }
@@ -91,6 +96,12 @@ void Solver::stop(PlayLayer* pl) {
         status = "stopped";
     }
     phase = Phase::Idle;
+    paused = false;
+    applyRender(pl);
+}
+
+void Solver::applyRender(PlayLayer* pl) {
+    if (pl) compat::setWorldVisible(pl, !(solving() && renderOff));
 }
 
 void Solver::setHeld(PlayLayer* pl, bool want) {
@@ -128,7 +139,7 @@ void Solver::init(PlayLayer* pl) {
     m_cpInterval = settingInt("checkpoint-interval");
     m_minPress = settingInt("min-press-ticks");
     m_minGap = settingInt("min-gap-ticks");
-    budgetMs = settingInt("sim-budget-ms");
+    if (!m_budgetTouched) budgetMs = settingInt("sim-budget-ms");
     m_prune = Mod::get()->getSettingValue<bool>("prune-clicks");
     m_rng.seed(static_cast<unsigned>(settingInt("seed")));
 
@@ -143,7 +154,11 @@ void Solver::init(PlayLayer* pl) {
     m_pruneDone = false;
     m_everCompleted = false;
     stuck = 0;
+    perf = Perf();
+    paused = false;
+    startTime = Clock::now();
     startVerify();
+    applyRender(pl);
 }
 
 void Solver::startVerify() {
@@ -173,10 +188,13 @@ void Solver::beginAttempt(PlayLayer* pl) {
     }
     m_cpValidLimit = INT_MAX;
 
+    auto t0 = Clock::now();
     m_inReset = true;
     pl->resetLevel(); // practice mode: respawns at the newest remaining checkpoint
     m_inReset = false;
     m_held = false;
+    perf.usReset += usSince(t0);
+    ++perf.resets;
 
     int expect = m_cpTicks.empty() ? 0 : m_cpTicks.back();
     // Trust nothing: the respawn point must be where the plan was at that
@@ -194,6 +212,7 @@ void Solver::beginAttempt(PlayLayer* pl) {
         }
     }
     m_tickOffset = expect - compat::rawTick(pl);
+    anchorTick = expect;
     m_lastCpTick = expect;
     m_streak = 0;
     m_died = m_completed = false;
@@ -232,7 +251,10 @@ bool Solver::preStep(PlayLayer* pl) {
     // releases the button) reproduces the exact same state.
     if (!m_held && t > 0 && t - m_lastCpTick >= m_cpInterval) {
         size_t before = compat::cpCount(pl);
+        auto t0 = Clock::now();
         compat::makeCheckpoint(pl);
+        perf.usCp += usSince(t0);
+        ++perf.cps;
         size_t after = compat::cpCount(pl);
         if (after == before + 1) {
             m_cpTicks.push_back(t);
@@ -492,6 +514,7 @@ void Solver::finish(PlayLayer* pl) {
     m_savedAttempts = -1;
     solved = true;
     phase = Phase::Idle;
+    applyRender(pl);
     bool saved = saveMacro();
     status = fmt::format("solved: {} clicks", clickCount(plan));
     Notification::create(
