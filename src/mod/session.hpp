@@ -88,7 +88,11 @@ inline bool uiConfigureSession(int levelId) {
         }
         // Avoid glitches: the searches drop the frame-level routes (Config::glitchPortal).
         if (g_uiGlitch) {
-            g_cfg.glitchPortal = kGlitchPortalDefault;
+            // Path Solver: the settings page's "portal-margin" in place of the fixed default, so a
+            // user who sees a portal skipped can ask for a wider miss to count as a skip. The
+            // loop's staged easing (repair.hpp g_glitchStage) still applies to it.
+            g_cfg.glitchPortal = std::max(
+                1.0, (double)Mod::get()->getSettingValue<int64_t>("portal-margin"));
             g_cfg.glitchWave = kGlitchWaveDefault;
             g_cfg.glitchEmbed = kGlitchEmbedDefault;
             g_cfg.glitchDeco = true;

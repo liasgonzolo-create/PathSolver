@@ -222,7 +222,8 @@ inline const char* describeSearch(int s) {
 inline int savedGlitchMode() {
     const int m = Mod::get()->getSavedValue<int>("play-glitch-mode", -1);
     if (m >= 0) return std::clamp(m, 0, UI_GLITCH_COUNT - 1);
-    return Mod::get()->getSavedValue<bool>("play-glitch", false) ? UI_GLITCH_ONLY : UI_GLITCH_OFF;
+    // Path Solver: with nothing saved yet, the human-style choice (glitch margins + the wave's behaviour).
+    return Mod::get()->getSavedValue<bool>("play-glitch", true) ? UI_GLITCH_WAVE : UI_GLITCH_OFF;
 }
 
 // What each Avoid glitches choice is: the detail behind Options' (i) button, and the Solve menu's one line.

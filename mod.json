@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.1.0-alpha.1",
+	"version": "v2.1.0-alpha.2",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -122,6 +122,14 @@
 			"default": 0,
 			"min": 0,
 			"max": 60
+		},
+		"portal-margin": {
+			"type": "int",
+			"name": "No portal skips: margin (px)",
+			"description": "Used when Avoid glitches is on (Solve > Options). A route that passes a portal which would change gamemode, size, gravity, speed or dual closer than this without touching it is dropped, so the solver goes through the portal as the level intends. 15 is the standard value; raise it (for example 60 or 120) if you still see a portal skipped. Where no route exists with it, the solver eases it for that stretch and says so. Needs a new solve.",
+			"default": 15,
+			"min": 1,
+			"max": 600
 		}
 	}
 }
