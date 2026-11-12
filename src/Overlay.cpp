@@ -119,17 +119,17 @@ void Overlay::redraw(PlayLayer* pl) {
     m_draw->clear();
 
     // ---- layout ----
-    bool small = s.phase == Phase::Playback;
-    CCRect panel = small
+    bool compact = s.phase == Phase::Playback;
+    CCRect panel = compact
         ? CCRect(win.width * 0.5f, win.height * 0.55f, win.width * 0.5f - 8.f, win.height * 0.45f - 8.f)
         : CCRect(14.f, win.height * 0.30f, win.width - 28.f, win.height * 0.70f - 10.f);
     const float textH = 34.f, barH = 16.f;
     m_view = CCRect(panel.origin.x + 4.f, panel.origin.y + barH + 4.f, panel.size.width - 8.f, panel.size.height - textH - barH - 8.f);
-    m_scale = m_view.size.width / (30.f * (small ? 20.f : 26.f)); // 26 blocks across
+    m_scale = m_view.size.width / (30.f * (compact ? 20.f : 26.f)); // 26 blocks across
 
     CCRect whole = m_view; // let fillRect draw the panel itself
     m_view = panel;
-    fillRect(panel, ccc4f(0.04f, 0.05f, 0.07f, small ? 0.80f : 0.90f));
+    fillRect(panel, ccc4f(0.04f, 0.05f, 0.07f, compact ? 0.80f : 0.90f));
     m_view = whole;
     fillRect(m_view, ccc4f(0.09f, 0.10f, 0.13f, 1.f));
 

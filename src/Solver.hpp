@@ -93,7 +93,6 @@ private:
     void setHeld(PlayLayer* pl, bool want);
     void syncCheckpoints(PlayLayer* pl);
     void popAll(PlayLayer* pl);
-    std::filesystem::path macroPath() const;
 
     bool m_needInit = false, m_needRewind = false, m_needPlaybackReset = false;
     bool m_held = false, m_injecting = false, m_died = false, m_completed = false;

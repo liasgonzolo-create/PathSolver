@@ -57,9 +57,15 @@ class $modify(PSPlayLayer, PlayLayer) {
         bool oldTestMode = false;
     };
 
+#if GEODE_COMP_GD_VERSION >= 22091
+    bool init(GJGameLevel* level, bool dontCreateObjects) {
+        Solver::get().onLevelEnter(level);
+        if (!PlayLayer::init(level, dontCreateObjects)) return false;
+#else
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
         Solver::get().onLevelEnter(level);
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+#endif
         auto overlay = ps::Overlay::create();
         overlay->setID("progress-map"_spr);
         this->addChild(overlay, 10000);

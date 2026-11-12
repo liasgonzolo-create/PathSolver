@@ -502,9 +502,8 @@ void Solver::playbackPre(PlayLayer* pl) {
 
 // ------------------------------------------------------------------ files
 
-std::filesystem::path Solver::macroPath() const {
-    return Mod::get()->getSaveDir() / "macros" / (m_levelKey + ".gdr.json");
-}
+// Path types differ between Geode 5 (std::filesystem) and Geode 6 (asp::fs),
+// so everything here goes through `auto` and Geode's own file helpers.
 
 bool Solver::saveMacro() {
     if (plan.empty() || m_levelKey.empty()) return false;
@@ -529,15 +528,16 @@ bool Solver::saveMacro() {
         "\"inputs\":[{}]}}",
         plan.size() / 240.0, m_levelId, m_levelName, inputs
     );
-    std::error_code ec;
-    std::filesystem::create_directories(macroPath().parent_path(), ec);
-    return utils::file::writeString(macroPath(), out).isOk();
+    auto dir = Mod::get()->getSaveDir() / "macros";
+    (void)utils::file::createDirectoryAll(dir);
+    auto file = dir / (m_levelKey + ".gdr.json");
+    return utils::file::writeString(file, out).isOk();
 }
 
 bool Solver::loadMacro() {
-    std::error_code ec;
-    if (m_levelKey.empty() || !std::filesystem::exists(macroPath(), ec)) return false;
-    auto text = utils::file::readString(macroPath());
+    if (m_levelKey.empty()) return false;
+    auto file = Mod::get()->getSaveDir() / "macros" / (m_levelKey + ".gdr.json");
+    auto text = utils::file::readString(file);
     if (!text.isOk()) return false;
     auto parsed = matjson::parse(text.unwrap());
     if (!parsed.isOk()) return false;
