@@ -23,6 +23,7 @@ struct Stats {
     int pruned = 0;     // clicks removed or merged
     int clicksBefore = 0;
     int window = 0;     // current look-back window in ticks
+    int cpFaults = 0;   // respawns that landed off the plan and forced a full replay
 };
 
 // How it works

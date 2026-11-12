@@ -237,8 +237,8 @@ void Overlay::redraw(PlayLayer* pl) {
             "tries {} ({:.0f}/s)   deaths {}   full runs {}   repairs {}   clicks removed {}",
             s.stats.attempts, m_rate, s.stats.deaths, s.stats.rounds, s.stats.fixups, s.stats.pruned).c_str());
         m_line3->setString(fmt::format(
-            "look-back {:.2f}s   stuck {}   blue/orange = plan (release/hold)   white = current try   red x = deaths",
-            s.stats.window / 240.f, s.stuck).c_str());
+            "look-back {:.2f}s   stuck {}   bad respawns {}   blue/orange = plan   white = current try   red x = deaths",
+            s.stats.window / 240.f, s.stuck, s.stats.cpFaults).c_str());
     }
 }
 

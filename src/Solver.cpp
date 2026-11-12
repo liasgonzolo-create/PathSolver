@@ -179,6 +179,20 @@ void Solver::beginAttempt(PlayLayer* pl) {
     m_held = false;
 
     int expect = m_cpTicks.empty() ? 0 : m_cpTicks.back();
+    // Trust nothing: the respawn point must be where the plan was at that
+    // tick. If it is not, the checkpoints are wrong; drop them all and replay
+    // from the start.
+    if (!m_cpTicks.empty() && expect < static_cast<int>(candPath.size())) {
+        auto pos = pl->m_player1->getPosition();
+        if (std::fabs(pos.x - candPath[expect].x) > 0.5f || std::fabs(pos.y - candPath[expect].y) > 0.5f) {
+            ++stats.cpFaults;
+            popAll(pl);
+            m_inReset = true;
+            pl->resetLevel();
+            m_inReset = false;
+            expect = 0;
+        }
+    }
     m_tickOffset = expect - compat::rawTick(pl);
     m_lastCpTick = expect;
     m_streak = 0;
@@ -219,7 +233,15 @@ bool Solver::preStep(PlayLayer* pl) {
     if (!m_held && t > 0 && t - m_lastCpTick >= m_cpInterval) {
         size_t before = compat::cpCount(pl);
         compat::makeCheckpoint(pl);
-        if (compat::cpCount(pl) == before + 1) m_cpTicks.push_back(t);
+        size_t after = compat::cpCount(pl);
+        if (after == before + 1) {
+            m_cpTicks.push_back(t);
+        } else if (after == before && !m_cpTicks.empty()) {
+            // The game caps how many checkpoints exist: it stored the new one
+            // and threw away the oldest. Mirror that so the lists stay aligned.
+            m_cpTicks.erase(m_cpTicks.begin());
+            m_cpTicks.push_back(t);
+        }
         m_lastCpTick = t;
     }
 
