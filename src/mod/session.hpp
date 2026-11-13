@@ -100,8 +100,13 @@ inline bool uiConfigureSession(int levelId) {
             g_cfg.wavePulse = 12;
             g_cfg.waveCentre = 8.0;
             g_waveSlideSetting = true;
-            g_cfg.waveTidy = 4.0;
-            g_cfg.waveToggle = 10;
+            // Experiment (2026-11-12, from a user's map of a 4x mini-wave zigzagging across open space): rank
+            // wave routes much harder by how few button changes they make, and barely by centring.
+            g_cfg.waveTidy = 1.0;
+            g_cfg.waveToggle = 60;
+            // "Full level" (settings page): solve on the level itself, not the cut-down copy, for a level
+            // that walls where a player does not.
+            if (Mod::get()->getSettingValue<bool>("full-level")) g_cfg.slice = false;
         } else if (g_uiGlitch) {
             // Path Solver: the settings page's "portal-margin" in place of the fixed default, so a
             // user who sees a portal skipped can ask for a wider miss to count as a skip. The

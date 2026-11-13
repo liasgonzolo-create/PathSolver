@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.2.0-alpha.1",
+	"version": "v2.2.0-alpha.2",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"
@@ -31,6 +31,12 @@
 			"name": "Choose the mode on Play",
 			"description": "Clicking a level's play button opens a menu: Normal, Replay or Solve. Off, a click just plays the level, as without the mod, and holding the play button opens the menu instead.",
 			"default": true
+		},
+		"full-level": {
+			"type": "bool",
+			"name": "Full level (slower, for levels that get stuck)",
+			"description": "Normally a big level is solved on a cut-down copy with the decoration removed, which is much faster. If a level keeps dying at one spot that a player gets past, turn this on and solve again: the bot then works on the real level with nothing removed. Needs a new solve.",
+			"default": false
 		},
 		"key-overlay": {
 			"type": "keybind",
