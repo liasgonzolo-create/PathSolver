@@ -1486,8 +1486,11 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
                 if (g_waveToggle > 0 && (int)s.action != input) add += g_waveToggle;
                 kid.s.tight = (uint16_t)std::min(0xffff, (int)kid.s.tight + add);
             }
-            // --clickcost: the same charge for a change of the button in every other gamemode.
-            if (!dead && g_clickCost > 0 && kid.s.mode != 4 && (int)s.action != input)
+            // --clickcost: the same charge for a change of the button in the other FLYING gamemodes (ship, UFO,
+            // swing). Not the cube, ball, robot or spider: their pressed and released children share a key, so a
+            // charge there only reorders which twin survives -- measured, a spider run went 21 -> 35 changes.
+            if (!dead && g_clickCost > 0 && (kid.s.mode == 1 || kid.s.mode == 3 || kid.s.mode == 7)
+                && (int)s.action != input)
                 kid.s.tight = (uint16_t)std::min(0xffff, (int)kid.s.tight + g_clickCost);
             kid.dead = dead ? 1 : 0;
             kid.valid = 1;
@@ -2322,7 +2325,8 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
                     const double stride = (double)rest.size() / (double)(take - 2);
                     for (double i = 0; (size_t)i < rest.size(); i += stride)
                         keepIdx.push_back(rest[(size_t)i]);
-                } else if (take > 0 && g_clickCap) {
+                } else if (take > 0 && g_clickCap
+                           && (nxt[v[0]].mode == 1 || nxt[v[0]].mode == 3 || nxt[v[0]].mode == 7)) {
                     // --clickcap (Path Solver): the class in y order, cut into `take` equal runs, and of each run
                     // the state whose route has the lowest score (fewest button changes) -- the same spread over
                     // y as the stride, but the cap no longer throws the calm routes away at random.
@@ -2485,9 +2489,11 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
         // --wavetidy / --wavetoggle: the next layer is stepped tidiest route first, so the first-accepted-wins dedupe
         // of its children keeps the tidier route into a cell. Stable: equal scores keep the order they had.
         // Only in a layer that has a wave in it: elsewhere the order is the one it was, and so is the cap's stride.
-        if (g_clickCost > 0
-            || ((g_waveTidy > 0.0 || g_waveToggle > 0)
-                && std::any_of(nxt.begin(), nxt.end(), [](const State& s) { return s.mode == 4; })))
+        if (((g_waveTidy > 0.0 || g_waveToggle > 0)
+             && std::any_of(nxt.begin(), nxt.end(), [](const State& s) { return s.mode == 4; }))
+            || (g_clickCost > 0 && std::any_of(nxt.begin(), nxt.end(), [](const State& s) {
+                   return s.mode == 1 || s.mode == 3 || s.mode == 7;
+               })))
             std::stable_sort(nxt.begin(), nxt.end(),
                              [](const State& a, const State& b) { return a.tight < b.tight; });
         prevAlive = cur.size();
