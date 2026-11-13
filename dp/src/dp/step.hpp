@@ -137,6 +137,8 @@ struct StepCtx {
     // at their place, not sent away. Null outside that pass (the windows are then the same).
     const std::vector<const Obj*>* nearRect = nullptr;
     const std::vector<const Obj*>* slopesRect = nullptr;
+    // --skyguard: the highest y a state may have in this group's column (1e18 = not asked).
+    double skyTop = 1e18;
 };
 
 // slopeVetoesSolid for the element `o` of K.near, through the group's index
@@ -2957,6 +2959,13 @@ inline State stepOne(const State& s, int input, const StepCtx& K, bool& dead,
             g_deadCx = g_deadCy = 0.f;                      // see the deadband site
             return c;
         }
+    }
+    // --skyguard (speed.hpp): far above everything in this column is off the level.
+    if (g_skyGuard > 0.0 && K.skyTop < 1e17 && !(s.frame & 3) && (double)s.y > K.skyTop) {
+        dead = true; g_deadWhy = "skyguard"; g_deadObj = nullptr;
+        g_deadKind = kDeathRule;
+        g_deadCx = g_deadCy = 0.f;
+        return c;
     }
     // --offboard (EXPERIMENT; speed.hpp): the loop's playfield bound, against the recorded band's
     // row at this tick -- the row offBoardTick reads for the attempt, in world y.

@@ -633,6 +633,7 @@ inline void resetInvocationState() {
     g_dynamicLevelHeight = 0;
     g_platformerMode = 0;
     g_maxPlayY = 1e18;
+    g_skyGuard = 0.0;
     g_fixNearReach = true;
     g_goalSpare = kDefGoalSpare;
     g_upsideCoyote = 1;

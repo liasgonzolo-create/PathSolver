@@ -335,6 +335,11 @@ inline int g_platformerMode = 0;
 // injection-bisected to 0.4px at two x) and lv9 (default 2,790: y=1,010
 // lives).
 inline double g_maxPlayY = 1e18;
+// --skyguard <px> (Path Solver; 0 = off): a state more than this far above everything in its own x
+// column (solids, hazards, slopes, portals, pads, orbs -- model.hpp prepareGroup's windows) is dropped:
+// it has left the level and is flying over it. A search restriction like the glitch margins, not physics;
+// a column with nothing in it asks nothing, and rotated frames are not judged.
+inline double g_skyGuard = 0.0;
 // --goalspare (EXPERIMENT): the two search prunes that stop a body ABOVE the level -- out-of-play
 // over g_yBound and escapee-prune over every surface still ahead -- keep one that reaches the goal
 // first. Both assume a body up there has nothing left to do, but one that stays alive to the goal

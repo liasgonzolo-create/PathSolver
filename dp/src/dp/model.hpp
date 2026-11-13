@@ -154,6 +154,7 @@ struct GroupEnv {
     std::vector<FollowRef> fol;          // --followy: the follow groups' objects in the windows
     const ModelWorld* w = nullptr;
     GroupOpts opts;
+    double skyTop = 1e18;   // --skyguard: this column's top + the margin
 
     StepCtx ctx() const {
         StepCtx c{x, xPrev, dxF, t, &near, &ports, &pads, &orbs, &slps, &spds,
@@ -161,6 +162,7 @@ struct GroupEnv {
                   opts.coins ? &coinLive : nullptr, opts.veto ? &w->vetoIdx : nullptr,
                   &nearSolid};
         c.fol = fol.empty() ? nullptr : &fol;
+        c.skyTop = skyTop;
         return c;
     }
 };
@@ -388,6 +390,14 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     ppSubMark(8);
     // Which ramps can veto which solid (SlopeVetoIndex): the same for every
     // state of the group, so worked out here once.
+    // --skyguard: the top of everything in the column, once per group.
+    e.skyTop = 1e18;
+    if (g_skyGuard > 0.0) {
+        double top = -1e18;
+        for (const std::vector<const Obj*>* v : {&near, &e.ports, &e.pads, &e.orbs, &e.slps})
+            for (const Obj* o : *v) top = std::max(top, o->cy + o->hh);
+        if (top > -1e17) e.skyTop = top + g_skyGuard;
+    }
     if (opts.veto) w.vetoIdx.build(near, e.slps);
     solidOrderInto(near, e.nearSolid);
     ppSubMark(9);

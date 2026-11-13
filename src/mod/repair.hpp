@@ -906,6 +906,7 @@ constexpr int kFineTriesPerLadder = 4;
 // nothing left: there it costs only the levels that have already failed without it.
 constexpr long long kCapTiers[] = {16000, 40000};
 constexpr double kTierYq = 0.5, kTierVq = 2.5;
+constexpr double kSkyGuardPx = 300.0;   // px above everything in the column before a state counts as off the level
 constexpr double kModePortalMargin = 75.0;   // px between the boxes under which passing a gamemode portal is a skip
 inline bool g_sectionHuman = true;   // the settings page's "section-human": the section search keeps the hold rules
 inline int g_humanMinPulse = 0;   // --minpulse for this session (0 = off)
@@ -3088,6 +3089,9 @@ inline std::vector<std::string> baseArgs(const std::string& out,
             // Path Solver: gamemode portals take a wider margin (dp --glitchmode), eased with the rest.
             a.push_back("--glitchmode");
             a.push_back(num(kModePortalMargin * sc));
+            // Path Solver: no flying over the level (dp --skyguard); off with the last easing step.
+            a.push_back("--skyguard");
+            a.push_back(num(kSkyGuardPx));
         }
         if (g_cfg.glitchWave > 0.0 && sc > 0.0) {
             a.push_back("--glitchwave");

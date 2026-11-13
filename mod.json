@@ -6,7 +6,7 @@
 	},
 	"id": "pathsolver.path-solver",
 	"name": "Path Solver",
-	"version": "v2.2.0-alpha.2",
+	"version": "v2.2.0-alpha.3",
 	"developers": [
 		"PathSolver",
 		"The gdsolver authors (upstream, MIT)"

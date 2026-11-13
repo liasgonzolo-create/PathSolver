@@ -2336,6 +2336,7 @@ inline int cliMainOnce(int argc, char** argv) {
             g_histStatPath = argv[i + 1];
         }
         if (!std::strcmp(argv[i], "--maxplayy")) g_maxPlayY = std::atof(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--skyguard")) g_skyGuard = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--offboard") && i + 1 < argc)
             g_offBoardMargin = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--shiftdbg")) g_shiftDbgUid = std::atoi(argv[i + 1]);
