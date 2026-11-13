@@ -26,6 +26,18 @@ struct FrameSlices {
     Level* lv = nullptr;
     std::unique_ptr<XSlice> near, port, pad, orb, slope, speed;
     double lastLo = -1e18;
+    // --skyguard: the top of everything static within kSkySpan px either side, per kSkyCell px of x
+    // (-1e18 where there is nothing). A lone low object under a high route must not read as the
+    // level's top there, so the neighbourhood is wide.
+    std::vector<double> skyEnv;
+    double skyX0 = 0.0;
+    static constexpr double kSkyCell = 150.0, kSkySpan = 900.0;
+    double skyTopAt(double x) const {
+        if (skyEnv.empty()) return -1e18;
+        const long i = (long)std::floor((x - skyX0) / kSkyCell);
+        if (i < 0 || i >= (long)skyEnv.size()) return -1e18;
+        return skyEnv[(size_t)i];
+    }
 };
 
 // (Re)build one frame's slices over that frame's level, cursors at the start.
@@ -37,6 +49,28 @@ inline void bindFrameSlices(FrameSlices& fs, Level& lv) {
     fs.orb = std::make_unique<XSlice>(lv.orbs);
     fs.slope = std::make_unique<XSlice>(lv.slopes);
     fs.speed = std::make_unique<XSlice>(lv.speeds);
+    fs.skyEnv.clear();
+    if (g_skyGuard > 0.0) {
+        const std::vector<Obj>* ls[5] = {&lv.objs, &lv.portals, &lv.pads, &lv.orbs, &lv.slopes};
+        double lo = 1e18, hi = -1e18;
+        for (const auto* v : ls)
+            for (const Obj& o : *v) { lo = std::min(lo, o.cx); hi = std::max(hi, o.cx); }
+        if (hi >= lo) {
+            fs.skyX0 = lo - FrameSlices::kSkySpan;
+            const size_t n = (size_t)((hi - lo + 2 * FrameSlices::kSkySpan) / FrameSlices::kSkyCell) + 2;
+            std::vector<double> cell(n, -1e18);
+            for (const auto* v : ls)
+                for (const Obj& o : *v) {
+                    const size_t i = (size_t)((o.cx - fs.skyX0) / FrameSlices::kSkyCell);
+                    if (i < n) cell[i] = std::max(cell[i], o.cy + o.hh);
+                }
+            const long r = (long)(FrameSlices::kSkySpan / FrameSlices::kSkyCell);
+            fs.skyEnv.assign(n, -1e18);
+            for (long i = 0; i < (long)n; ++i)
+                for (long j = std::max(0L, i - r); j <= std::min((long)n - 1, i + r); ++j)
+                    fs.skyEnv[(size_t)i] = std::max(fs.skyEnv[(size_t)i], cell[(size_t)j]);
+        }
+    }
 }
 
 // The world one search call plans in: the level, the vehicle parameters, the coin tables the
@@ -393,7 +427,7 @@ inline void prepareGroup(ModelWorld& w, FrameSlices& FS, GroupEnv& e, int gframe
     // --skyguard: the top of everything in the column, once per group.
     e.skyTop = 1e18;
     if (g_skyGuard > 0.0) {
-        double top = -1e18;
+        double top = FS.skyTopAt(x);
         for (const std::vector<const Obj*>* v : {&near, &e.ports, &e.pads, &e.orbs, &e.slps})
             for (const Obj* o : *v) top = std::max(top, o->cy + o->hh);
         if (top > -1e17) e.skyTop = top + g_skyGuard;

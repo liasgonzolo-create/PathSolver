@@ -3126,6 +3126,13 @@ inline std::vector<std::string> baseArgs(const std::string& out,
     if (g_cfg.waveToggle > 0) {
         a.push_back("--wavetoggle");
         a.push_back(std::to_string(g_cfg.waveToggle));
+        // Path Solver: the same preference for every other gamemode (dp --clickcost), and -- until the
+        // loop has had to escalate -- the cap keeping the calmest route of each height band (--clickcap).
+        // Measured on synthetic levels with the dp CLI (2026-11-12): a ship slalom 499 -> 11 button
+        // changes, an open ship run 534 -> 1, a UFO run 134 -> 31, a cube over 13 spikes unchanged at 26.
+        a.push_back("--clickcost");
+        a.push_back(std::to_string(g_cfg.waveToggle));
+        if (g_capTier == 0 && !g_coldRestarted) a.push_back("--clickcap");
     }
     addWorldArgs(a);
     // cfg dprejoinwatch: the model's trace of the plan that last died,

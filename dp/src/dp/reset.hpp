@@ -714,6 +714,8 @@ inline void resetInvocationState() {
     g_waveSlideOk = false;
     g_waveTidy = 0.0;
     g_waveToggle = 0;
+    g_clickCost = 0;
+    g_clickCap = false;
     g_startEdge = -1;
     g_glitchEmbed = 0.0;
     g_glitchDeco = false;

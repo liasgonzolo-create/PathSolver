@@ -103,7 +103,7 @@ inline bool uiConfigureSession(int levelId) {
             // Experiment (2026-11-12, from a user's map of a 4x mini-wave zigzagging across open space): rank
             // wave routes much harder by how few button changes they make, and barely by centring.
             g_cfg.waveTidy = 1.0;
-            g_cfg.waveToggle = 60;
+            g_cfg.waveToggle = 20;   // measured offline with dp's --clickcost 20 (repair.hpp baseArgs)
             // "Full level" (settings page): solve on the level itself, not the cut-down copy, for a level
             // that walls where a player does not.
             if (Mod::get()->getSettingValue<bool>("full-level")) g_cfg.slice = false;

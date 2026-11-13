@@ -1913,6 +1913,8 @@ inline int cliMainOnce(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--wavecentre")) g_waveCentre = std::atof(argv[i + 1]);   // the wave-behaviour option
         if (!std::strcmp(argv[i], "--wavetidy")) g_waveTidy = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--wavetoggle")) g_waveToggle = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--clickcost")) g_clickCost = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--clickcap")) g_clickCap = true;
         if (!std::strcmp(argv[i], "--startedge")) g_startEdge = std::atoi(argv[i + 1]);
     }
     for (int i = 2; i < argc; ++i)

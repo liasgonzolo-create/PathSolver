@@ -1486,6 +1486,9 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
                 if (g_waveToggle > 0 && (int)s.action != input) add += g_waveToggle;
                 kid.s.tight = (uint16_t)std::min(0xffff, (int)kid.s.tight + add);
             }
+            // --clickcost: the same charge for a change of the button in every other gamemode.
+            if (!dead && g_clickCost > 0 && kid.s.mode != 4 && (int)s.action != input)
+                kid.s.tight = (uint16_t)std::min(0xffff, (int)kid.s.tight + g_clickCost);
             kid.dead = dead ? 1 : 0;
             kid.valid = 1;
             // the dedupe key is a pure function of the child, so it belongs on
@@ -2319,6 +2322,28 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
                     const double stride = (double)rest.size() / (double)(take - 2);
                     for (double i = 0; (size_t)i < rest.size(); i += stride)
                         keepIdx.push_back(rest[(size_t)i]);
+                } else if (take > 0 && g_clickCap) {
+                    // --clickcap (Path Solver): the class in y order, cut into `take` equal runs, and of each run
+                    // the state whose route has the lowest score (fewest button changes) -- the same spread over
+                    // y as the stride, but the cap no longer throws the calm routes away at random.
+                    std::vector<uint32_t> o(v);
+                    std::sort(o.begin(), o.end(), [&](uint32_t a, uint32_t b) {
+                        if (nxt[a].y != nxt[b].y) return nxt[a].y < nxt[b].y;
+                        if (nxt[a].vy != nxt[b].vy) return nxt[a].vy < nxt[b].vy;
+                        return a < b;
+                    });
+                    const double stride = (double)o.size() / (double)take;
+                    size_t before = keepIdx.size();
+                    for (size_t k = 0; k < take; ++k) {
+                        const size_t b0 = (size_t)((double)k * stride);
+                        const size_t b1 = std::min(o.size(), std::max(b0 + 1, (size_t)((double)(k + 1) * stride)));
+                        if (b0 >= o.size()) break;
+                        size_t best = b0;
+                        for (size_t j = b0 + 1; j < b1; ++j)
+                            if (nxt[o[j]].tight < nxt[o[best]].tight) best = j;
+                        keepIdx.push_back(o[best]);
+                    }
+                    std::sort(keepIdx.begin() + (std::ptrdiff_t)before, keepIdx.end());
                 } else if (take > 0) {
                     const double stride = (double)v.size() / (double)take;
                     for (double i = 0; (size_t)i < v.size() && take > 0; i += stride)
@@ -2460,8 +2485,9 @@ inline int searchLayers(E& e, const Rules& rules, SearchResult& out) {
         // --wavetidy / --wavetoggle: the next layer is stepped tidiest route first, so the first-accepted-wins dedupe
         // of its children keeps the tidier route into a cell. Stable: equal scores keep the order they had.
         // Only in a layer that has a wave in it: elsewhere the order is the one it was, and so is the cap's stride.
-        if ((g_waveTidy > 0.0 || g_waveToggle > 0)
-            && std::any_of(nxt.begin(), nxt.end(), [](const State& s) { return s.mode == 4; }))
+        if (g_clickCost > 0
+            || ((g_waveTidy > 0.0 || g_waveToggle > 0)
+                && std::any_of(nxt.begin(), nxt.end(), [](const State& s) { return s.mode == 4; })))
             std::stable_sort(nxt.begin(), nxt.end(),
                              [](const State& a, const State& b) { return a.tight < b.tight; });
         prevAlive = cur.size();

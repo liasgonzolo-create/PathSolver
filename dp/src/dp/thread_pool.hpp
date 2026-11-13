@@ -214,6 +214,14 @@ inline bool g_waveSlideOk = false;
 //                       keeps the tidier route into a cell.
 inline double g_waveTidy = 0.0;
 inline int g_waveToggle = 0;
+//   --clickcost <T>     (Path Solver) --wavetoggle for every OTHER gamemode: T on the route's score for each change
+//                       of the button, so of the routes into a cell the one with fewer presses and releases is
+//                       kept -- a ship flown in long arcs rather than a 2-tick flutter, a cube that does not jump
+//                       where it need not. A preference only; it drops nothing. 0 = off.
+inline int g_clickCost = 0;
+//   --clickcap          with a score in play: where the per-layer cap thins a class, keep the lowest-scored state of
+//                       each run of the class in y order rather than every n-th in layer order.
+inline bool g_clickCap = false;
 //   --startedge <ticks>  an anchored call: the ticks the button had already been in its present state at the anchor
 //                        (State::edgeAge of the start state; -1 = not said, which leaves it at "long ago"). The mod
 //                        reads it off the plan the game flew, so --wavepulse / --minpulse hold across a re-anchor.
